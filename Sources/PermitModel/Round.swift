@@ -3,13 +3,13 @@ import Foundation
 public struct Round: Equatable, Codable, Sendable {
     // MARK: - Constants
 
-    static let maxLogActions: Int = 100
+    public static let maxLogActions: Int = 100
     public static let initialSegments: Int = 45
-    static let initialHandSize: Int = 4
-    static let faceUpCount: Int = 5
-    static let initialPermitCount: Int = 3
-    static let minInitialPermitsToKeep: Int = 2
-    static let finalRoundSegmentThreshold: Int = 2
+    public static let initialHandSize: Int = 4
+    public static let faceUpCount: Int = 5
+    public static let initialPermitCount: Int = 3
+    public static let minInitialPermitsToKeep: Int = 2
+    public static let finalRoundSegmentThreshold: Int = 2
 
     // MARK: - Initialized Properties
 

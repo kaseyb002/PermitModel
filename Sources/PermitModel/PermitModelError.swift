@@ -25,5 +25,5 @@ public enum PermitModelError: Error, Equatable, Sendable {
     case mustKeepAtLeastTwoInitialPermits
     case invalidPermitSelection
     case gameIsComplete
-    case cannotDrawFiberAsSecondCard
+    case cannotDrawWildAsSecondCard
 }

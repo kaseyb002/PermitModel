@@ -6,7 +6,7 @@ public struct Card: Equatable, Codable, Identifiable, Hashable, Sendable {
     public let id: CardID
     public let color: CardColor
 
-    public var isFiber: Bool { color.isFiber }
+    public var isWild: Bool { color.isWild }
 
     public init(id: CardID, color: CardColor) {
         self.id = id
@@ -21,7 +21,7 @@ public struct Card: Equatable, Codable, Identifiable, Hashable, Sendable {
             }
         }
         for i in 1...14 {
-            cards.append(Card(id: "fiber-\(i)", color: .fiber))
+            cards.append(Card(id: "wild-\(i)", color: .wild))
         }
         return cards
     }

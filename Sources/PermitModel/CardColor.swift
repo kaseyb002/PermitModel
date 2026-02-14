@@ -9,11 +9,11 @@ public enum CardColor: String, Equatable, Codable, CaseIterable, Sendable {
     case yellow
     case black
     case red
-    case fiber
+    case wild
 
     public static var regularColors: [CardColor] {
         [.purple, .blue, .orange, .white, .green, .yellow, .black, .red]
     }
 
-    public var isFiber: Bool { self == .fiber }
+    public var isWild: Bool { self == .wild }
 }

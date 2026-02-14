@@ -202,11 +202,11 @@ public struct AIEngine: Sendable {
     // MARK: - Card Drawing Helpers
 
     private func randomDrawCardAction(round: Round) -> AIAction {
-        // Prefer a non-fiber face-up card if available, otherwise draw pile
-        let nonFiberIndices: [Int] = round.faceUpCards.enumerated().compactMap { index, cardID in
-            round.cardsMap[cardID]?.isFiber != true ? index : nil
+        // Prefer a non-wild face-up card if available, otherwise draw pile
+        let nonWildIndices: [Int] = round.faceUpCards.enumerated().compactMap { index, cardID in
+            round.cardsMap[cardID]?.isWild != true ? index : nil
         }
-        if let idx = nonFiberIndices.randomElement() {
+        if let idx = nonWildIndices.randomElement() {
             return .drawCards(source: .faceUp(index: idx))
         }
         return .drawCards(source: .drawPile)
@@ -223,15 +223,15 @@ public struct AIEngine: Sendable {
 
         // Check face-up cards for a match
         for (index, cardID) in round.faceUpCards.enumerated() {
-            guard let card = round.cardsMap[cardID], !card.isFiber else { continue }
+            guard let card = round.cardsMap[cardID], !card.isWild else { continue }
             if neededColors.contains(card.color) {
                 return .drawCards(source: .faceUp(index: index))
             }
         }
 
-        // Check for a fiber card (always useful as wild)
+        // Check for a wild card (always useful)
         for (index, cardID) in round.faceUpCards.enumerated() {
-            if round.cardsMap[cardID]?.isFiber == true {
+            if round.cardsMap[cardID]?.isWild == true {
                 return .drawCards(source: .faceUp(index: index))
             }
         }
@@ -240,11 +240,11 @@ public struct AIEngine: Sendable {
     }
 
     private func chooseSecondCardSource(round: Round) -> AIAction {
-        // Can't draw fiber as second card from face-up, so pick a non-fiber face-up or draw pile
-        let nonFiberIndices: [Int] = round.faceUpCards.enumerated().compactMap { index, cardID in
-            round.cardsMap[cardID]?.isFiber != true ? index : nil
+        // Can't draw wild as second card from face-up, so pick a non-wild face-up or draw pile
+        let nonWildIndices: [Int] = round.faceUpCards.enumerated().compactMap { index, cardID in
+            round.cardsMap[cardID]?.isWild != true ? index : nil
         }
-        if let idx = nonFiberIndices.randomElement() {
+        if let idx = nonWildIndices.randomElement() {
             return .drawCards(source: .faceUp(index: idx))
         }
         return .drawCards(source: .drawPile)
@@ -279,38 +279,38 @@ public struct AIEngine: Sendable {
     }
 
     private func findCardsForRoute(route: Route, handCards: [Card], cardsMap: [CardID: Card]) -> [CardID]? {
-        let fiberCards: [Card] = handCards.filter { $0.isFiber }
-        let nonFiberCards: [Card] = handCards.filter { !$0.isFiber }
+        let wildCards: [Card] = handCards.filter { $0.isWild }
+        let nonWildCards: [Card] = handCards.filter { !$0.isWild }
 
         if route.color == .any {
-            // Group non-fiber cards by color, find a color with enough cards (+ fibers)
-            let grouped: [CardColor: [Card]] = Dictionary(grouping: nonFiberCards, by: \.color)
+            // Group non-wild cards by color, find a color with enough cards (+ wilds)
+            let grouped: [CardColor: [Card]] = Dictionary(grouping: nonWildCards, by: \.color)
             for (_, cards) in grouped {
                 if cards.count >= route.length {
                     return Array(cards.prefix(route.length).map(\.id))
                 }
-                if cards.count + fiberCards.count >= route.length {
+                if cards.count + wildCards.count >= route.length {
                     var selected: [CardID] = cards.map(\.id)
-                    let fibersNeeded: Int = route.length - cards.count
-                    selected.append(contentsOf: fiberCards.prefix(fibersNeeded).map(\.id))
+                    let wildsNeeded: Int = route.length - cards.count
+                    selected.append(contentsOf: wildCards.prefix(wildsNeeded).map(\.id))
                     return selected
                 }
             }
-            // All fibers
-            if fiberCards.count >= route.length {
-                return Array(fiberCards.prefix(route.length).map(\.id))
+            // All wilds
+            if wildCards.count >= route.length {
+                return Array(wildCards.prefix(route.length).map(\.id))
             }
         } else {
             let requiredColor: CardColor? = cardColorForRouteColor(route.color)
             guard let color = requiredColor else { return nil }
-            let matching: [Card] = nonFiberCards.filter { $0.color == color }
+            let matching: [Card] = nonWildCards.filter { $0.color == color }
             if matching.count >= route.length {
                 return Array(matching.prefix(route.length).map(\.id))
             }
-            if matching.count + fiberCards.count >= route.length {
+            if matching.count + wildCards.count >= route.length {
                 var selected: [CardID] = matching.map(\.id)
-                let fibersNeeded: Int = route.length - matching.count
-                selected.append(contentsOf: fiberCards.prefix(fibersNeeded).map(\.id))
+                let wildsNeeded: Int = route.length - matching.count
+                selected.append(contentsOf: wildCards.prefix(wildsNeeded).map(\.id))
                 return selected
             }
         }

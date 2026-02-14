@@ -3,6 +3,11 @@ import Foundation
 extension Round {
     // MARK: - Select Initial Permits (Setup Phase)
 
+    /// During the setup phase, allows a player to choose which permits to keep from their initial draw.
+    /// - Parameters:
+    ///   - playerID: The player making the selection.
+    ///   - permitIDs: The permit IDs to keep; the rest are returned to the deck. Must keep at least two permits.
+    /// - Throws: `PermitModelError` if not in setup phase, player not found, or selection is invalid.
     public mutating func selectInitialPermits(playerID: PlayerID, permitIDs: [PermitID]) throws {
         guard case .setup(var pendingPlayers) = state else {
             throw PermitModelError.notInSetupPhase
@@ -41,6 +46,10 @@ extension Round {
 
     // MARK: - Draw Card
 
+    /// Draws a card from the deck or face-up display for the current player.
+    /// Drawing a face-up wild on the first draw ends the turn immediately.
+    /// - Parameter source: Where to draw from (e.g., deck or face-up card at index).
+    /// - Throws: `PermitModelError` if the game is complete, not waiting for the player to act, or the source is invalid.
     public mutating func drawCard(from source: DrawSource) throws {
         guard !isComplete else { throw PermitModelError.gameIsComplete }
 
@@ -49,15 +58,15 @@ extension Round {
             let cardID: CardID = try removeCard(from: source)
             addCardToPlayer(playerID: playerID, cardID: cardID)
 
-            let drewFaceUpFiber: Bool
+            let drewFaceUpWild: Bool
             if case .faceUp = source {
-                drewFaceUpFiber = cardsMap[cardID]?.isFiber == true
+                drewFaceUpWild = cardsMap[cardID]?.isWild == true
                 refillFaceUpCards()
             } else {
-                drewFaceUpFiber = false
+                drewFaceUpWild = false
             }
 
-            if drewFaceUpFiber {
+            if drewFaceUpWild {
                 logAction(playerID: playerID, decision: .drawCards(cardIds: [cardID]))
                 advanceToNextPlayer()
             } else if !canDrawAnotherCard {
@@ -72,8 +81,8 @@ extension Round {
                 guard index < faceUpCards.count else {
                     throw PermitModelError.invalidFaceUpIndex
                 }
-                guard cardsMap[faceUpCards[index]]?.isFiber != true else {
-                    throw PermitModelError.cannotDrawFiberAsSecondCard
+                guard cardsMap[faceUpCards[index]]?.isWild != true else {
+                    throw PermitModelError.cannotDrawWildAsSecondCard
                 }
             }
 
@@ -94,6 +103,11 @@ extension Round {
 
     // MARK: - Claim Route
 
+    /// Claims a route on the board for the current player by spending matching cards.
+    /// - Parameters:
+    ///   - routeID: The route to claim.
+    ///   - cardIDs: The cards from the player's hand to spend; must match the route length and color requirements.
+    /// - Throws: `PermitModelError` if the route is unavailable, cards are invalid, or the player lacks segments.
     public mutating func claimRoute(routeID: RouteID, cardIDs: [CardID]) throws {
         guard !isComplete else { throw PermitModelError.gameIsComplete }
         guard case .waitingForPlayer(let playerID, .choosingAction) = state else {
@@ -164,6 +178,9 @@ extension Round {
 
     // MARK: - Draw Permits
 
+    /// Draws up to three destination permits from the deck for the current player to choose from.
+    /// After calling this, the player must call `keepPermits` to complete the action.
+    /// - Throws: `PermitModelError` if the game is complete, not in the choosing-action phase, or no permits are available.
     public mutating func drawPermits() throws {
         guard !isComplete else { throw PermitModelError.gameIsComplete }
         guard case .waitingForPlayer(let playerID, .choosingAction) = state else {
@@ -184,6 +201,10 @@ extension Round {
 
     // MARK: - Keep Permits
 
+    /// Keeps the selected permits from a drawn set; the rest are discarded.
+    /// Called after `drawPermits` to complete the draw-permits action.
+    /// - Parameter permitIDs: The permit IDs to keep from the drawn permits. Must keep at least one.
+    /// - Throws: `PermitModelError` if not in the choosing-permits phase or the selection is invalid.
     public mutating func keepPermits(permitIDs: [PermitID]) throws {
         guard !isComplete else { throw PermitModelError.gameIsComplete }
         guard case .waitingForPlayer(let playerID, .choosingPermits(let drawn)) = state else {
@@ -247,8 +268,8 @@ extension Round {
     }
 
     mutating func replaceFaceUpIfNeeded() {
-        let fiberCount: Int = faceUpCards.filter { cardsMap[$0]?.isFiber == true }.count
-        guard fiberCount >= 3 else { return }
+        let wildCount: Int = faceUpCards.filter { cardsMap[$0]?.isWild == true }.count
+        guard wildCount >= 3 else { return }
 
         // Always discard all 5 face-up; if deck is exhausted, we leave fewer than 5 (TTR USA rules).
         discardPile.append(contentsOf: faceUpCards)
@@ -271,7 +292,7 @@ extension Round {
 
     private var canDrawAnotherCard: Bool {
         if !drawPile.isEmpty || !discardPile.isEmpty { return true }
-        return faceUpCards.contains { cardsMap[$0]?.isFiber != true }
+        return faceUpCards.contains { cardsMap[$0]?.isWild != true }
     }
 
     private func validateCardsForRoute(cardIDs: [CardID], route: Route) throws {
@@ -282,17 +303,17 @@ extension Round {
             return card
         }
 
-        let nonFiberCards: [Card] = cards.filter { !$0.isFiber }
+        let nonWildCards: [Card] = cards.filter { !$0.isWild }
 
         switch route.color {
         case .any:
-            let colors: Set<CardColor> = Set(nonFiberCards.map(\.color))
+            let colors: Set<CardColor> = Set(nonWildCards.map(\.color))
             guard colors.count <= 1 else {
                 throw PermitModelError.invalidCardColor
             }
         default:
             let requiredCardColor: CardColor? = routeColorToCardColor(route.color)
-            for card in nonFiberCards {
+            for card in nonWildCards {
                 guard card.color == requiredCardColor else {
                     throw PermitModelError.invalidCardColor
                 }

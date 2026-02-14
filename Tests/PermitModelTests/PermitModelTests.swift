@@ -36,7 +36,7 @@ private func makeSimpleDeck() -> [Card] {
     var cards: [Card] = []
     for i in 1...30 { cards.append(Card(id: "blue-\(i)", color: .blue)) }
     for i in 1...30 { cards.append(Card(id: "red-\(i)", color: .red)) }
-    for i in 1...4 { cards.append(Card(id: "fiber-\(i)", color: .fiber)) }
+    for i in 1...4 { cards.append(Card(id: "wild-\(i)", color: .wild)) }
     return cards
 }
 
@@ -209,11 +209,11 @@ func drawCardFromFaceUp() throws {
 }
 
 @Test
-func drawFiberFromFaceUpEndsDrawPhase() throws {
-    // Create a deck where a fiber card ends up in face-up position
+func drawWildFromFaceUpEndsDrawPhase() throws {
+    // Create a deck where a wild card ends up in face-up position
     var cards: [Card] = []
     for i in 1...8 { cards.append(Card(id: "blue-\(i)", color: .blue)) }
-    cards.append(Card(id: "fiber-1", color: .fiber)) // Will be face-up[0]
+    cards.append(Card(id: "wild-1", color: .wild)) // Will be face-up[0]
     for i in 9...40 { cards.append(Card(id: "blue-\(i)", color: .blue)) }
 
     var round: Round = try Round(
@@ -227,25 +227,25 @@ func drawFiberFromFaceUpEndsDrawPhase() throws {
     try round.selectInitialPermits(playerID: "alice", permitIDs: Array(round.playerHands[0].permits.prefix(2).map(\.id)))
     try round.selectInitialPermits(playerID: "bob", permitIDs: Array(round.playerHands[1].permits.prefix(2).map(\.id)))
 
-    // Alice draws fiber from face-up → turn ends immediately (only 1 card)
+    // Alice draws wild from face-up → turn ends immediately (only 1 card)
     try round.drawCard(from: .faceUp(index: 0))
 
     if case .waitingForPlayer(let id, .choosingAction) = round.state {
         #expect(id == "bob")
     } else {
-        Issue.record("Expected Bob's turn after fiber draw")
+        Issue.record("Expected Bob's turn after wild draw")
     }
 
-    #expect(round.playerHands[0].cards.count == 5) // 4 initial + 1 fiber
+    #expect(round.playerHands[0].cards.count == 5) // 4 initial + 1 wild
 }
 
 @Test
-func cannotDrawFiberAsSecondCard() throws {
-    // Create a deck where fiber appears as second face-up after first draw
+func cannotDrawWildAsSecondCard() throws {
+    // Create a deck where wild appears as second face-up after first draw
     var cards: [Card] = []
     for i in 1...8 { cards.append(Card(id: "blue-\(i)", color: .blue)) }
     cards.append(Card(id: "blue-extra", color: .blue)) // face-up[0]
-    cards.append(Card(id: "fiber-1", color: .fiber))    // face-up[1]
+    cards.append(Card(id: "wild-1", color: .wild))    // face-up[1]
     for i in 9...40 { cards.append(Card(id: "blue-\(i)", color: .blue)) }
 
     var round: Round = try Round(
@@ -258,29 +258,29 @@ func cannotDrawFiberAsSecondCard() throws {
     try round.selectInitialPermits(playerID: "alice", permitIDs: Array(round.playerHands[0].permits.prefix(2).map(\.id)))
     try round.selectInitialPermits(playerID: "bob", permitIDs: Array(round.playerHands[1].permits.prefix(2).map(\.id)))
 
-    // Alice draws non-fiber from face-up
+    // Alice draws non-wild from face-up
     try round.drawCard(from: .faceUp(index: 0))
 
-    // Find the fiber card index in face-up
-    let fiberIndex: Int? = round.faceUpCards.firstIndex(where: { round.cardsMap[$0]?.isFiber == true })
-    if let idx = fiberIndex {
-        #expect(throws: PermitModelError.cannotDrawFiberAsSecondCard) {
+    // Find the wild card index in face-up
+    let wildIndex: Int? = round.faceUpCards.firstIndex(where: { round.cardsMap[$0]?.isWild == true })
+    if let idx = wildIndex {
+        #expect(throws: PermitModelError.cannotDrawWildAsSecondCard) {
             try round.drawCard(from: .faceUp(index: idx))
         }
     }
 }
 
 @Test
-/// TTR USA rule: when 3+ fibers (wilds) are face-up, discard all 5 and replace. Refill from draw (or reshuffle discard if draw empty).
-func replaceFaceUpWhenThreeFibersDiscardsAndRefills() throws {
+/// TTR USA rule: when 3+ wilds are face-up, discard all 5 and replace. Refill from draw (or reshuffle discard if draw empty).
+func replaceFaceUpWhenThreeWildsDiscardsAndRefills() throws {
     // Init order: first 8 to hands, then 5 to face-up, rest to draw. Indices 8–12 = face-up; 13+ = draw.
-    // Face-up = 3 fibers + 2 blue (triggers replace). Draw = 5 blues so refill gets < 3 fibers and recursion stops.
+    // Face-up = 3 wilds + 2 blue (triggers replace). Draw = 5 blues so refill gets < 3 wilds and recursion stops.
     var cards: [Card] = []
     for i in 1...8 { cards.append(Card(id: "blue-\(i)", color: .blue)) }
     cards.append(contentsOf: [
-        Card(id: "fiber-1", color: .fiber),
-        Card(id: "fiber-2", color: .fiber),
-        Card(id: "fiber-3", color: .fiber),
+        Card(id: "wild-1", color: .wild),
+        Card(id: "wild-2", color: .wild),
+        Card(id: "wild-3", color: .wild),
         Card(id: "blue-9", color: .blue),
         Card(id: "blue-10", color: .blue),
     ])
@@ -293,10 +293,10 @@ func replaceFaceUpWhenThreeFibersDiscardsAndRefills() throws {
         players: makePlayers()
     )
 
-    // replaceFaceUpIfNeeded runs at end of init: discard 5, refill 5 from draw (all blue) → < 3 fibers.
+    // replaceFaceUpIfNeeded runs at end of init: discard 5, refill 5 from draw (all blue) → < 3 wilds.
     #expect(round.faceUpCards.count == 5)
-    let fiberCount: Int = round.faceUpCards.filter { round.cardsMap[$0]?.isFiber == true }.count
-    #expect(fiberCount < 3)
+    let wildCount: Int = round.faceUpCards.filter { round.cardsMap[$0]?.isWild == true }.count
+    #expect(wildCount < 3)
     #expect(round.discardPile.count == 5)
 }
 
@@ -483,7 +483,7 @@ func standardMapLoads() {
 @Test
 func standardDeckSize() {
     let deck: [Card] = Card.standardDeck()
-    #expect(deck.count == 110) // 12 * 8 colors + 14 fibers
+    #expect(deck.count == 110) // 12 * 8 colors + 14 wilds
 }
 
 // MARK: - Full Round Playthrough
