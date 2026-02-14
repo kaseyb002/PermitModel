@@ -249,10 +249,11 @@ extension Round {
     mutating func replaceFaceUpIfNeeded() {
         let fiberCount: Int = faceUpCards.filter { cardsMap[$0]?.isFiber == true }.count
         guard fiberCount >= 3 else { return }
-        guard !drawPile.isEmpty else { return }
 
+        // Always discard all 5 face-up; if deck is exhausted, we leave fewer than 5 (TTR USA rules).
         discardPile.append(contentsOf: faceUpCards)
         faceUpCards = []
+        reshuffleDeckIfNeeded()
         for _ in 0..<Self.faceUpCount {
             if !drawPile.isEmpty {
                 faceUpCards.append(drawPile.removeFirst())
