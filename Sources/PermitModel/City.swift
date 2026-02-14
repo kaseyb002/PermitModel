@@ -78,4 +78,46 @@ public enum City: String, Equatable, Codable, Sendable, CaseIterable {
         case .houston: "Houston"
         }
     }
+
+    /// Short name for compact display (≤10 chars).
+    public var shortDisplayName: String {
+        switch self {
+        case .vancouver: "Vanc"
+        case .calgary: "Calgary"
+        case .seattle: "Seattle"
+        case .portland: "Portland"
+        case .winnipeg: "Wpg"
+        case .helena: "Helena"
+        case .duluth: "Duluth"
+        case .saltLakeCity: "SLC"
+        case .sanFrancisco: "SF"
+        case .saultStMarie: "SSM"
+        case .toronto: "Toronto"
+        case .montreal: "Montreal"
+        case .boston: "Boston"
+        case .newYork: "NY"
+        case .pittsburgh: "Pgh"
+        case .chicago: "Chicago"
+        case .omaha: "Omaha"
+        case .denver: "Denver"
+        case .lasVegas: "Vegas"
+        case .losAngeles: "LA"
+        case .phoenix: "Phoenix"
+        case .santaFe: "Santa Fe"
+        case .elPaso: "El Paso"
+        case .kansasCity: "KC"
+        case .saintLouis: "STL"
+        case .oklahomaCity: "OKC"
+        case .nashville: "Nash"
+        case .raleigh: "Raleigh"
+        case .washington: "Wash"
+        case .charleston: "Charl"
+        case .atlanta: "Atlanta"
+        case .miami: "Miami"
+        case .newOrleans: "NOLA"
+        case .littleRock: "LR"
+        case .dallas: "Dallas"
+        case .houston: "Houston"
+        }
+    }
 }
