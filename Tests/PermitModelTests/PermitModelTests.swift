@@ -270,6 +270,36 @@ func cannotDrawFiberAsSecondCard() throws {
     }
 }
 
+@Test
+/// TTR USA rule: when 3+ fibers (wilds) are face-up, discard all 5 and replace. Refill from draw (or reshuffle discard if draw empty).
+func replaceFaceUpWhenThreeFibersDiscardsAndRefills() throws {
+    // Init order: first 8 to hands, then 5 to face-up, rest to draw. Indices 8–12 = face-up; 13+ = draw.
+    // Face-up = 3 fibers + 2 blue (triggers replace). Draw = 5 blues so refill gets < 3 fibers and recursion stops.
+    var cards: [Card] = []
+    for i in 1...8 { cards.append(Card(id: "blue-\(i)", color: .blue)) }
+    cards.append(contentsOf: [
+        Card(id: "fiber-1", color: .fiber),
+        Card(id: "fiber-2", color: .fiber),
+        Card(id: "fiber-3", color: .fiber),
+        Card(id: "blue-9", color: .blue),
+        Card(id: "blue-10", color: .blue),
+    ])
+    for i in 11...15 { cards.append(Card(id: "blue-\(i)", color: .blue)) }
+
+    let round: Round = try Round(
+        cookedDeck: cards,
+        cookedPermits: makeSimpleMap().permits,
+        gameMap: makeSimpleMap(),
+        players: makePlayers()
+    )
+
+    // replaceFaceUpIfNeeded runs at end of init: discard 5, refill 5 from draw (all blue) → < 3 fibers.
+    #expect(round.faceUpCards.count == 5)
+    let fiberCount: Int = round.faceUpCards.filter { round.cardsMap[$0]?.isFiber == true }.count
+    #expect(fiberCount < 3)
+    #expect(round.discardPile.count == 5)
+}
+
 // MARK: - Claim Route Tests
 
 @Test
