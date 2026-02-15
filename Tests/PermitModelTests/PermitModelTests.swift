@@ -613,6 +613,125 @@ func roundCodable() throws {
     #expect(decoded.routes.count == round.routes.count)
 }
 
+// MARK: - Claimable Routes Tests
+
+@Test
+func claimableRoutesReturnsMatchingRoutes() throws {
+    let round: Round = try makeReadyRound()
+
+    // Alice has 4 blue cards. Routes: 1(V-C,1,any), 2(C-W,1,any), 3(W-H,1,any), 4(V-H,2,blue), 5(C-H,2,red), 6(C-H,2,green)
+    let claimable: [(route: Route, cardIDs: [CardID])] = round.claimableRoutes(for: "alice")
+
+    let routeIDs: Set<RouteID> = Set(claimable.map(\.route.id))
+
+    // Alice can claim: 1, 2, 3 (any color, length 1), 4 (blue, length 2). Not 5 or 6 (needs red/green).
+    #expect(routeIDs.contains(1))
+    #expect(routeIDs.contains(2))
+    #expect(routeIDs.contains(3))
+    #expect(routeIDs.contains(4))
+    #expect(!routeIDs.contains(5))
+    #expect(!routeIDs.contains(6))
+
+    for (route, cardIDs) in claimable {
+        #expect(cardIDs.count == route.length)
+    }
+}
+
+@Test
+func claimabilityClaimable() throws {
+    let round: Round = try makeReadyRound()
+    let route1: Route = round.routes.first(where: { $0.id == 1 })!
+
+    let status: RouteClaimability = round.claimability(for: route1, playerID: "alice")
+
+    if case .claimable(let cardIDs) = status {
+        #expect(cardIDs.count == 1)
+    } else {
+        Issue.record("Expected claimable, got \(status)")
+    }
+}
+
+@Test
+func claimabilityNeedMoreCards() throws {
+    let round: Round = try makeReadyRound()
+
+    // Route 5 is Calgary-Helena, length 2, red. Alice only has blue cards.
+    let route5: Route = round.routes.first(where: { $0.id == 5 })!
+    let status: RouteClaimability = round.claimability(for: route5, playerID: "alice")
+
+    if case .needMoreCards(let routeColor, let have, let need) = status {
+        #expect(routeColor == .red)
+        #expect(have < need)
+    } else {
+        Issue.record("Expected needMoreCards, got \(status)")
+    }
+}
+
+@Test
+func claimabilityNeedMoreSegments() throws {
+    let round: Round = try makeReadyRound(segmentsPerPlayer: 1)
+
+    // Alice has only 1 segment. Route 4 is length 2.
+    let route4: Route = round.routes.first(where: { $0.id == 4 })!
+    let status: RouteClaimability = round.claimability(for: route4, playerID: "alice")
+
+    if case .needMoreSegments(let has, let need) = status {
+        #expect(has == 1)
+        #expect(need == 2)
+    } else {
+        Issue.record("Expected needMoreSegments, got \(status)")
+    }
+}
+
+@Test
+func claimabilityRouteAlreadyClaimed() throws {
+    var round: Round = try makeReadyRound()
+
+    // Alice claims route 1
+    try round.claimRoute(routeID: 1, cardIDs: [round.playerHands[0].cards[0]])
+
+    let route1: Route = round.routes.first(where: { $0.id == 1 })!
+    let status: RouteClaimability = round.claimability(for: route1, playerID: "bob")
+
+    if case .routeAlreadyClaimed = status {
+        // Expected
+    } else {
+        Issue.record("Expected routeAlreadyClaimed, got \(status)")
+    }
+}
+
+@Test
+func claimabilityDoubleRouteBlocked() throws {
+    var round: Round = try makeReadyRound()
+
+    // Give Alice enough red cards to claim route 5 (Calgary-Helena, red, length 2)
+    var cards: [Card] = []
+    for i in 1...8 { cards.append(Card(id: "red-\(i)", color: .red)) }
+    for i in 9...60 { cards.append(Card(id: "blue-\(i)", color: .blue)) }
+
+    round = try Round(
+        cookedDeck: cards,
+        cookedPermits: makeSimpleMap().permits,
+        gameMap: makeSimpleMap(),
+        players: makePlayers()
+    )
+    try round.selectInitialPermits(playerID: "alice", permitIDs: Array(round.playerHands[0].permits.prefix(2).map(\.id)))
+    try round.selectInitialPermits(playerID: "bob", permitIDs: Array(round.playerHands[1].permits.prefix(2).map(\.id)))
+
+    // Alice claims route 5 (Calgary-Helena, red)
+    try round.claimRoute(routeID: 5, cardIDs: Array(round.playerHands[0].cards.prefix(2)))
+
+    // Bob tries route 6 (double of 5). In 2-player game, other player claimed the double.
+    let route6: Route = round.routes.first(where: { $0.id == 6 })!
+    let status: RouteClaimability = round.claimability(for: route6, playerID: "bob")
+
+    if case .doubleRouteBlocked = status {
+        // Expected: Bob cannot claim route 6 because Alice has route 5 and it's 2-player
+    } else {
+        Issue.record("Expected doubleRouteBlocked, got \(status)")
+    }
+}
+
 // MARK: - AI Engine Tests
 
 @Test

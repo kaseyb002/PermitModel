@@ -48,7 +48,7 @@ public struct AIEngine: Sendable {
     // MARK: - Main Action Selection
 
     private func chooseMainAction(round: Round, playerID: PlayerID) -> AIAction {
-        let claimable: [(route: Route, cardIDs: [CardID])] = findClaimableRoutes(round: round, playerID: playerID)
+        let claimable: [(route: Route, cardIDs: [CardID])] = round.claimableRoutes(for: playerID)
 
         switch difficulty {
         case .easy:
@@ -251,71 +251,6 @@ public struct AIEngine: Sendable {
     }
 
     // MARK: - Route Analysis
-
-    private func findClaimableRoutes(round: Round, playerID: PlayerID) -> [(route: Route, cardIDs: [CardID])] {
-        guard let hand = round.playerHand(for: playerID) else { return [] }
-        let handCards: [Card] = hand.cards.compactMap { round.cardsMap[$0] }
-
-        var results: [(route: Route, cardIDs: [CardID])] = []
-
-        for route in round.routes {
-            guard route.claimedBy == nil else { continue }
-            guard hand.remainingSegments >= route.length else { continue }
-
-            // Check double route restrictions
-            if let partnerID = route.doubleRoutePartnerID {
-                if let partner = round.routes.first(where: { $0.id == partnerID }) {
-                    if partner.claimedBy == playerID { continue }
-                    if round.playerHands.count <= 3 && partner.claimedBy != nil { continue }
-                }
-            }
-
-            if let cardIDs = findCardsForRoute(route: route, handCards: handCards, cardsMap: round.cardsMap) {
-                results.append((route: route, cardIDs: cardIDs))
-            }
-        }
-
-        return results
-    }
-
-    private func findCardsForRoute(route: Route, handCards: [Card], cardsMap: [CardID: Card]) -> [CardID]? {
-        let wildCards: [Card] = handCards.filter { $0.isWild }
-        let nonWildCards: [Card] = handCards.filter { !$0.isWild }
-
-        if route.color == .any {
-            // Group non-wild cards by color, find a color with enough cards (+ wilds)
-            let grouped: [CardColor: [Card]] = Dictionary(grouping: nonWildCards, by: \.color)
-            for (_, cards) in grouped {
-                if cards.count >= route.length {
-                    return Array(cards.prefix(route.length).map(\.id))
-                }
-                if cards.count + wildCards.count >= route.length {
-                    var selected: [CardID] = cards.map(\.id)
-                    let wildsNeeded: Int = route.length - cards.count
-                    selected.append(contentsOf: wildCards.prefix(wildsNeeded).map(\.id))
-                    return selected
-                }
-            }
-            // All wilds
-            if wildCards.count >= route.length {
-                return Array(wildCards.prefix(route.length).map(\.id))
-            }
-        } else {
-            let requiredColor: CardColor? = cardColorForRouteColor(route.color)
-            guard let color = requiredColor else { return nil }
-            let matching: [Card] = nonWildCards.filter { $0.color == color }
-            if matching.count >= route.length {
-                return Array(matching.prefix(route.length).map(\.id))
-            }
-            if matching.count + wildCards.count >= route.length {
-                var selected: [CardID] = matching.map(\.id)
-                let wildsNeeded: Int = route.length - matching.count
-                selected.append(contentsOf: wildCards.prefix(wildsNeeded).map(\.id))
-                return selected
-            }
-        }
-        return nil
-    }
 
     private func cardColorForRouteColor(_ routeColor: Route.Color) -> CardColor? {
         switch routeColor {
