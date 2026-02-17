@@ -21,6 +21,30 @@ public struct Route: Equatable, Codable, Identifiable, Sendable {
         case black
         case red
         case any
+
+        /// The equivalent `CardColor`, or `nil` for `.any`.
+        public var cardColor: CardColor? {
+            switch self {
+            case .purple: .purple
+            case .blue: .blue
+            case .orange: .orange
+            case .white: .white
+            case .green: .green
+            case .yellow: .yellow
+            case .black: .black
+            case .red: .red
+            case .any: nil
+            }
+        }
+
+        /// Whether the given card color can be used on this route color.
+        /// Wild cards are not considered here; check `Card.isWild` separately.
+        public func matches(_ cardColor: CardColor) -> Bool {
+            switch self {
+            case .any: true
+            default: self.cardColor == cardColor
+            }
+        }
     }
 
     public enum CodingKeys: String, CodingKey {

@@ -126,16 +126,6 @@ extension Round {
     }
 
     private func routeColorToCardColor(_ routeColor: Route.Color) -> CardColor? {
-        switch routeColor {
-        case .purple: .purple
-        case .blue: .blue
-        case .orange: .orange
-        case .white: .white
-        case .green: .green
-        case .yellow: .yellow
-        case .black: .black
-        case .red: .red
-        case .any: nil
-        }
+        routeColor.cardColor
     }
 }
