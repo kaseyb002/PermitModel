@@ -70,6 +70,12 @@ public struct AIEngine: Sendable {
             return .claimRoute(routeID: pick.route.id, cardIDs: pick.cardIDs)
         } else if roll < 0.4, !round.permitDeck.isEmpty {
             return .drawPermits
+        } else if round.canDrawAnyCard {
+            return randomDrawCardAction(round: round)
+        } else if let pick = claimable.randomElement() {
+            return .claimRoute(routeID: pick.route.id, cardIDs: pick.cardIDs)
+        } else if !round.permitDeck.isEmpty {
+            return .drawPermits
         } else {
             return randomDrawCardAction(round: round)
         }
@@ -98,8 +104,8 @@ public struct AIEngine: Sendable {
             return .claimRoute(routeID: best.route.id, cardIDs: best.cardIDs)
         }
 
-        // If few cards, draw
-        if let hand, hand.cards.count < 6 {
+        // If few cards, draw (if any draw is possible)
+        if let hand, hand.cards.count < 6, round.canDrawAnyCard {
             return randomDrawCardAction(round: round)
         }
 
@@ -108,6 +114,15 @@ public struct AIEngine: Sendable {
             return .drawPermits
         }
 
+        if round.canDrawAnyCard {
+            return randomDrawCardAction(round: round)
+        }
+        if let pick = claimable.randomElement() {
+            return .claimRoute(routeID: pick.route.id, cardIDs: pick.cardIDs)
+        }
+        if !round.permitDeck.isEmpty {
+            return .drawPermits
+        }
         return randomDrawCardAction(round: round)
     }
 
@@ -156,7 +171,16 @@ public struct AIEngine: Sendable {
             return .drawPermits
         }
 
-        // Otherwise draw cards, preferring useful colors
+        // Otherwise draw cards if possible, preferring useful colors
+        if round.canDrawAnyCard {
+            return smartDrawCardAction(round: round, playerID: playerID)
+        }
+        if let pick = claimable.randomElement() {
+            return .claimRoute(routeID: pick.route.id, cardIDs: pick.cardIDs)
+        }
+        if !round.permitDeck.isEmpty {
+            return .drawPermits
+        }
         return smartDrawCardAction(round: round, playerID: playerID)
     }
 
@@ -202,11 +226,18 @@ public struct AIEngine: Sendable {
     // MARK: - Card Drawing Helpers
 
     private func randomDrawCardAction(round: Round) -> AIAction {
-        // Prefer a non-wild face-up card if available, otherwise draw pile
+        // Prefer a non-wild face-up card if available, otherwise draw pile (only if pile has cards)
         let nonWildIndices: [Int] = round.faceUpCards.enumerated().compactMap { index, cardID in
             round.cardsMap[cardID]?.isWild != true ? index : nil
         }
         if let idx = nonWildIndices.randomElement() {
+            return .drawCards(source: .faceUp(index: idx))
+        }
+        if round.canDrawFromPile {
+            return .drawCards(source: .drawPile)
+        }
+        // Pile empty: take any face-up (e.g. wild) if available
+        if let idx = round.faceUpCards.indices.randomElement() {
             return .drawCards(source: .faceUp(index: idx))
         }
         return .drawCards(source: .drawPile)
@@ -215,7 +246,7 @@ public struct AIEngine: Sendable {
     private func smartDrawCardAction(round: Round, playerID: PlayerID) -> AIAction {
         // Try to draw a face-up card whose color matches unclaimed routes we want
         guard let hand = round.playerHand(for: playerID) else {
-            return .drawCards(source: .drawPile)
+            return fallbackDrawCardAction(round: round)
         }
 
         // Find colors we need for permit-relevant routes
@@ -236,6 +267,17 @@ public struct AIEngine: Sendable {
             }
         }
 
+        return fallbackDrawCardAction(round: round)
+    }
+
+    /// Returns a valid draw action: draw pile only if it has cards, otherwise a face-up card if any.
+    private func fallbackDrawCardAction(round: Round) -> AIAction {
+        if round.canDrawFromPile {
+            return .drawCards(source: .drawPile)
+        }
+        if let idx = round.faceUpCards.indices.randomElement() {
+            return .drawCards(source: .faceUp(index: idx))
+        }
         return .drawCards(source: .drawPile)
     }
 
@@ -245,6 +287,13 @@ public struct AIEngine: Sendable {
             round.cardsMap[cardID]?.isWild != true ? index : nil
         }
         if let idx = nonWildIndices.randomElement() {
+            return .drawCards(source: .faceUp(index: idx))
+        }
+        if round.canDrawFromPile {
+            return .drawCards(source: .drawPile)
+        }
+        // No non-wild face-up and pile empty: take a face-up anyway (will throw cannotDrawWildAsSecondCard in rare edge case)
+        if let idx = round.faceUpCards.indices.randomElement() {
             return .drawCards(source: .faceUp(index: idx))
         }
         return .drawCards(source: .drawPile)

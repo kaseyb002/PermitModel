@@ -41,6 +41,16 @@ extension Round {
         faceUpCards.compactMap { cardsMap[$0] }
     }
 
+    /// True if drawing from the pile would succeed (draw pile or discard pile has cards; discard is reshuffled when draw is empty).
+    public var canDrawFromPile: Bool {
+        !drawPile.isEmpty || !discardPile.isEmpty
+    }
+
+    /// True if the current player can draw at least one card (from pile or from face-up).
+    public var canDrawAnyCard: Bool {
+        canDrawFromPile || !faceUpCards.isEmpty
+    }
+
     public func claimedRoutes(for playerID: PlayerID) -> [Route] {
         routes.filter { $0.claimedBy == playerID }
     }
