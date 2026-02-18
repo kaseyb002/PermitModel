@@ -268,19 +268,21 @@ extension Round {
     }
 
     mutating func replaceFaceUpIfNeeded() {
-        let wildCount: Int = faceUpCards.filter { cardsMap[$0]?.isWild == true }.count
-        guard wildCount >= 3 else { return }
+        var previousCardSets: [Set<CardID>] = []
 
-        // Always discard all 5 face-up; if deck is exhausted, we leave fewer than 5 (TTR USA rules).
-        discardPile.append(contentsOf: faceUpCards)
-        faceUpCards = []
-        reshuffleDeckIfNeeded()
-        for _ in 0..<Self.faceUpCount {
-            if !drawPile.isEmpty {
+        while faceUpCards.filter({ cardsMap[$0]?.isWild == true }).count >= 3 {
+            let currentSet: Set<CardID> = Set(faceUpCards)
+            if previousCardSets.contains(currentSet) { break }
+            previousCardSets.append(currentSet)
+
+            discardPile.append(contentsOf: faceUpCards)
+            faceUpCards = []
+            for _ in 0..<Self.faceUpCount {
+                reshuffleDeckIfNeeded()
+                guard !drawPile.isEmpty else { break }
                 faceUpCards.append(drawPile.removeFirst())
             }
         }
-        replaceFaceUpIfNeeded()
     }
 
     private mutating func reshuffleDeckIfNeeded() {
