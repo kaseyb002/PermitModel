@@ -61,10 +61,10 @@ extension Round {
             let drewFaceUpWild: Bool
             if case .faceUp = source {
                 drewFaceUpWild = cardsMap[cardID]?.isWild == true
-                refillFaceUpCards()
             } else {
                 drewFaceUpWild = false
             }
+            refillFaceUpCards()
 
             if drewFaceUpWild {
                 logAction(playerID: playerID, decision: .drawCards(cardIds: [cardID]))
@@ -89,9 +89,7 @@ extension Round {
             let cardID: CardID = try removeCard(from: source)
             addCardToPlayer(playerID: playerID, cardID: cardID)
 
-            if case .faceUp = source {
-                refillFaceUpCards()
-            }
+            refillFaceUpCards()
 
             logAction(playerID: playerID, decision: .drawCards(cardIds: [firstCardID, cardID]))
             advanceToNextPlayer()
