@@ -361,6 +361,8 @@ extension Round {
     }
 
     private mutating func advanceToNextPlayer() {
+        refillFaceUpCards()
+
         if turnsRemainingInFinalRound != nil {
             turnsRemainingInFinalRound! -= 1
             if turnsRemainingInFinalRound! <= 0 {

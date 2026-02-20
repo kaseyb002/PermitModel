@@ -850,3 +850,74 @@ func aiEngineFullGame() throws {
     #expect(round.isComplete)
     #expect(round.ended != nil)
 }
+
+// MARK: - Face-Up Card Count Invariant
+
+@Test(.tags(.faceUpInvariant))
+func faceUpCardsAlwaysFiveWithStandardDeck() throws {
+    for gameIndex in 0..<20 {
+        var round: Round = try Round(
+            gameMap: .standard(),
+            players: makeFourPlayers()
+        )
+
+        // Setup: all players select initial permits
+        while case .setup(let pending) = round.state, let firstID = pending.first {
+            let hand: PlayerHand = round.playerHand(for: firstID)!
+            let keepIDs: [PermitID] = Array(hand.permits.prefix(Round.minInitialPermitsToKeep).map(\.id))
+            try round.selectInitialPermits(playerID: firstID, permitIDs: keepIDs)
+        }
+
+        assertFaceUpInvariant(round: round, context: "game \(gameIndex) after setup")
+
+        let engine: AIEngine = AIEngine(difficulty: .hard)
+        var turnCount: Int = 0
+        let maxTurns: Int = 300
+
+        while !round.isComplete && turnCount < maxTurns {
+            guard let playerID = round.currentPlayerID else { break }
+
+            let action: AIAction = engine.chooseAction(for: round, playerID: playerID)
+            try action.apply(to: &round, playerID: playerID)
+            assertFaceUpInvariant(round: round, context: "game \(gameIndex) turn \(turnCount) after action \(action)")
+
+            if case .waitingForPlayer(let id, .choosingPermits) = round.state {
+                let keepAction: AIAction = engine.chooseAction(for: round, playerID: id)
+                try keepAction.apply(to: &round, playerID: id)
+                assertFaceUpInvariant(round: round, context: "game \(gameIndex) turn \(turnCount) after keepPermits")
+            }
+
+            if case .waitingForPlayer(let id, .drawingSecondCard) = round.state {
+                let secondAction: AIAction = engine.chooseAction(for: round, playerID: id)
+                try secondAction.apply(to: &round, playerID: id)
+                assertFaceUpInvariant(round: round, context: "game \(gameIndex) turn \(turnCount) after second draw")
+            }
+
+            turnCount += 1
+        }
+
+        #expect(round.isComplete, "Game \(gameIndex) should complete within \(maxTurns) turns")
+    }
+}
+
+private func makeFourPlayers() -> [Player] {
+    [
+        Player(id: "alice", name: "Alice", imageURL: nil, color: .blue),
+        Player(id: "bob", name: "Bob", imageURL: nil, color: .red),
+        Player(id: "charlie", name: "Charlie", imageURL: nil, color: .green),
+        Player(id: "diana", name: "Diana", imageURL: nil, color: .yellow),
+    ]
+}
+
+private func assertFaceUpInvariant(round: Round, context: String) {
+    let totalAvailable: Int = round.drawPile.count + round.discardPile.count + round.faceUpCards.count
+    let expectedFaceUp: Int = min(Round.faceUpCount, totalAvailable)
+    #expect(
+        round.faceUpCards.count == expectedFaceUp,
+        "Face-up count was \(round.faceUpCards.count) but expected \(expectedFaceUp) (draw: \(round.drawPile.count), discard: \(round.discardPile.count)) at \(context)"
+    )
+}
+
+extension Tag {
+    @Tag static var faceUpInvariant: Self
+}
