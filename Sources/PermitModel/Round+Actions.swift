@@ -19,7 +19,7 @@ extension Round {
             throw PermitModelError.mustKeepAtLeastTwoInitialPermits
         }
 
-        guard let handIndex = playerHands.firstIndex(where: { $0.player.id == playerID }) else {
+        guard let handIndex: Int = playerHands.firstIndex(where: { $0.player.id == playerID }) else {
             throw PermitModelError.playerNotFound
         }
 
@@ -51,7 +51,9 @@ extension Round {
     /// - Parameter source: Where to draw from (e.g., deck or face-up card at index).
     /// - Throws: `PermitModelError` if the game is complete, not waiting for the player to act, or the source is invalid.
     public mutating func drawCard(from source: DrawSource) throws {
-        guard !isComplete else { throw PermitModelError.gameIsComplete }
+        guard isComplete == false else {
+            throw PermitModelError.gameIsComplete
+        }
 
         switch state {
         case .waitingForPlayer(let playerID, .choosingAction):
@@ -69,7 +71,7 @@ extension Round {
             if drewFaceUpWild {
                 logAction(playerID: playerID, decision: .drawCards(cardIds: [cardID]))
                 advanceToNextPlayer()
-            } else if !canDrawAnotherCard {
+            } else if canDrawAnotherCard == false {
                 logAction(playerID: playerID, decision: .drawCards(cardIds: [cardID]))
                 advanceToNextPlayer()
             } else {
@@ -259,10 +261,18 @@ extension Round {
     mutating func refillFaceUpCards() {
         while faceUpCards.count < Self.faceUpCount {
             reshuffleDeckIfNeeded()
-            guard !drawPile.isEmpty else { break }
+            guard drawPile.isEmpty == false else {
+                break
+            }
             faceUpCards.append(drawPile.removeFirst())
         }
         replaceFaceUpIfNeeded()
+        // replaceFaceUpIfNeeded() can leave fewer than 5 when the draw runs out during refill; fill again
+        while faceUpCards.count < Self.faceUpCount {
+            reshuffleDeckIfNeeded()
+            guard !drawPile.isEmpty else { break }
+            faceUpCards.append(drawPile.removeFirst())
+        }
     }
 
     mutating func replaceFaceUpIfNeeded() {
@@ -286,12 +296,17 @@ extension Round {
     private mutating func reshuffleDeckIfNeeded() {
         if drawPile.isEmpty && !discardPile.isEmpty {
             drawPile = discardPile.shuffled()
-            discardPile = []
+            discardPile.removeAll()
         }
     }
 
     private var canDrawAnotherCard: Bool {
-        if !drawPile.isEmpty || !discardPile.isEmpty { return true }
+        if drawPile.isEmpty == false {
+            return true
+        }
+        if discardPile.isEmpty == false {
+            return true
+        }
         return faceUpCards.contains { cardsMap[$0]?.isWild != true }
     }
 
