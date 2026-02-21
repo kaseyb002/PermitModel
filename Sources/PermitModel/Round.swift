@@ -60,7 +60,7 @@ public struct Round: Equatable, Codable, Sendable {
 
     public enum TurnPhase: Equatable, Codable, Sendable {
         case choosingAction
-        case drawingSecondCard(firstCardId: CardID)
+        case drawingSecondCard(firstCardId: CardID, firstDrawSource: DrawSource)
         case choosingPermits(drawn: [Permit])
     }
 
@@ -73,13 +73,24 @@ public struct Round: Equatable, Codable, Sendable {
 
     // MARK: - Action Log
 
+    /// A single drawn card and where it was drawn from (for log display).
+    public struct DrawnCard: Equatable, Codable, Sendable {
+        public let cardID: CardID
+        public let source: DrawSource
+
+        public init(cardID: CardID, source: DrawSource) {
+            self.cardID = cardID
+            self.source = source
+        }
+    }
+
     public struct Action: Equatable, Codable, Sendable {
         public let playerID: PlayerID
         public let decision: Decision
         public let timestamp: Date
 
         public enum Decision: Equatable, Codable, Sendable {
-            case drawCards(cardIds: [CardID])
+            case drawCards([DrawnCard])
             case claimRoute(routeId: RouteID, cardIds: [CardID], points: Int)
             case drawPermits(keptPermitIds: [PermitID])
         }

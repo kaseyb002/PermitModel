@@ -69,16 +69,16 @@ extension Round {
             refillFaceUpCards()
 
             if drewFaceUpWild {
-                logAction(playerID: playerID, decision: .drawCards(cardIds: [cardID]))
+                logAction(playerID: playerID, decision: .drawCards([DrawnCard(cardID: cardID, source: source)]))
                 advanceToNextPlayer()
             } else if canDrawAnotherCard == false {
-                logAction(playerID: playerID, decision: .drawCards(cardIds: [cardID]))
+                logAction(playerID: playerID, decision: .drawCards([DrawnCard(cardID: cardID, source: source)]))
                 advanceToNextPlayer()
             } else {
-                state = .waitingForPlayer(id: playerID, phase: .drawingSecondCard(firstCardId: cardID))
+                state = .waitingForPlayer(id: playerID, phase: .drawingSecondCard(firstCardId: cardID, firstDrawSource: source))
             }
 
-        case .waitingForPlayer(let playerID, .drawingSecondCard(let firstCardID)):
+        case .waitingForPlayer(let playerID, .drawingSecondCard(let firstCardID, let firstDrawSource)):
             if case .faceUp(let index) = source {
                 guard index < faceUpCards.count else {
                     throw PermitModelError.invalidFaceUpIndex
@@ -93,7 +93,10 @@ extension Round {
 
             refillFaceUpCards()
 
-            logAction(playerID: playerID, decision: .drawCards(cardIds: [firstCardID, cardID]))
+            logAction(playerID: playerID, decision: .drawCards([
+                DrawnCard(cardID: firstCardID, source: firstDrawSource),
+                DrawnCard(cardID: cardID, source: source),
+            ]))
             advanceToNextPlayer()
 
         default:
