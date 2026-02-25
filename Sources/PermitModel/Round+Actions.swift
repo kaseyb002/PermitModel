@@ -280,10 +280,23 @@ extension Round {
 
     mutating func replaceFaceUpIfNeeded() {
         var previousCardSets: [Set<CardID>] = []
+        var didLastChanceReshuffle = false
 
         while faceUpCards.filter({ cardsMap[$0]?.isWild == true }).count >= 3 {
             let currentSet: Set<CardID> = Set(faceUpCards)
-            if previousCardSets.contains(currentSet) { break }
+            if previousCardSets.contains(currentSet) {
+                if didLastChanceReshuffle { break }
+                // One more try: full reshuffle then replace, so we don't leave 5 wilds unless deck has no non-wilds
+                didLastChanceReshuffle = true
+                discardPile.append(contentsOf: faceUpCards)
+                faceUpCards = []
+                reshuffleDeckIfNeeded()
+                for _ in 0..<Self.faceUpCount {
+                    guard !drawPile.isEmpty else { break }
+                    faceUpCards.append(drawPile.removeFirst())
+                }
+                continue
+            }
             previousCardSets.append(currentSet)
 
             discardPile.append(contentsOf: faceUpCards)
