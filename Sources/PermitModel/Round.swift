@@ -78,6 +78,11 @@ public struct Round: Equatable, Codable, Sendable {
         public let cardID: CardID
         public let source: DrawSource
 
+        public enum CodingKeys: String, CodingKey {
+            case cardID = "cardId"
+            case source
+        }
+
         public init(cardID: CardID, source: DrawSource) {
             self.cardID = cardID
             self.source = source
