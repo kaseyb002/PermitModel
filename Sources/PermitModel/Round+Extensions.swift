@@ -24,6 +24,11 @@ extension Round {
         playerHands.first(where: { $0.player.id == playerID })
     }
 
+    public var currentPlayerHand: PlayerHand? {
+        guard let id = currentPlayerID else { return nil }
+        return playerHand(for: id)
+    }
+
     public func player(byID id: PlayerID) -> Player? {
         playerHands.first(where: { $0.player.id == id })?.player
     }
