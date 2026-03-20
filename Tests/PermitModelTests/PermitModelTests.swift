@@ -596,6 +596,73 @@ func fakeFactories() throws {
     #expect(round.playerHands.count == 2)
 }
 
+@Test
+func fakeCompletedRound() throws {
+    let round = try Round.fakeCompleted()
+
+    // Game is complete with a winner
+    guard case .gameComplete(let winner) = round.state else {
+        Issue.record("Expected gameComplete state")
+        return
+    }
+    #expect(round.isComplete)
+    #expect(round.ended != nil)
+
+    // Two players: Alice and Bob
+    #expect(round.playerHands.count == 2)
+    let alice = round.playerHands[0]
+    let bob = round.playerHands[1]
+    #expect(alice.player.name == "Alice")
+    #expect(bob.player.name == "Bob")
+
+    // Alice wins
+    #expect(winner.id == alice.player.id)
+    #expect(alice.player.score > bob.player.score)
+
+    // Both have permits (3 each)
+    #expect(alice.permits.count == 3)
+    #expect(bob.permits.count == 3)
+
+    // Alice completed all 3 permits
+    for permit in alice.permits {
+        #expect(round.isPermitCompleted(permit: permit, playerID: alice.player.id))
+    }
+
+    // Bob completed 2 of 3 (Boston→Miami is not)
+    let bobCompleted = bob.permits.filter { round.isPermitCompleted(permit: $0, playerID: bob.player.id) }
+    #expect(bobCompleted.count == 2)
+
+    // Routes were claimed
+    let aliceRoutes = round.routes.filter { $0.claimedBy == alice.player.id }
+    let bobRoutes = round.routes.filter { $0.claimedBy == bob.player.id }
+    #expect(aliceRoutes.count == 7)
+    #expect(bobRoutes.count == 10)
+
+    // Segments consumed match claimed routes
+    let aliceSegmentsUsed = aliceRoutes.reduce(0) { $0 + $1.length }
+    #expect(alice.remainingSegments == 23 - aliceSegmentsUsed)
+    let bobSegmentsUsed = bobRoutes.reduce(0) { $0 + $1.length }
+    #expect(bob.remainingSegments == 23 - bobSegmentsUsed)
+
+    // Final round was triggered
+    #expect(round.finalRoundTriggeredBy == alice.player.id)
+    #expect(round.turnsRemainingInFinalRound == 0)
+
+    // Action log is populated
+    #expect(round.log.count == 10)
+
+    // Card accounting: all card IDs exist in cardsMap
+    let allCardIDs = round.playerHands.flatMap(\.cards) + round.drawPile + round.discardPile + round.faceUpCards
+    for cardID in allCardIDs {
+        #expect(round.cardsMap[cardID] != nil, "Card \(cardID) missing from cardsMap")
+    }
+
+    // Round-trips through Codable
+    let data = try JSONEncoder().encode(round)
+    let decoded = try JSONDecoder().decode(Round.self, from: data)
+    #expect(decoded == round)
+}
+
 // MARK: - Codable Tests
 
 @Test
