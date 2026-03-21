@@ -802,9 +802,9 @@ func claimabilityDoubleRouteBlocked() throws {
 // MARK: - AI Engine Tests
 
 @Test
-func aiEngineEasyReturnsValidAction() throws {
+func aiEngineReturnsValidAction() throws {
     var round: Round = try makeReadyRound()
-    let engine: AIEngine = AIEngine(difficulty: .easy)
+    let engine: AIEngine = AIEngine()
 
     let action: AIAction = engine.chooseAction(for: round, playerID: "alice")
 
@@ -813,29 +813,11 @@ func aiEngineEasyReturnsValidAction() throws {
 }
 
 @Test
-func aiEngineMediumReturnsValidAction() throws {
-    var round: Round = try makeReadyRound()
-    let engine: AIEngine = AIEngine(difficulty: .medium)
-
-    let action: AIAction = engine.chooseAction(for: round, playerID: "alice")
-    try action.apply(to: &round, playerID: "alice")
-}
-
-@Test
-func aiEngineHardReturnsValidAction() throws {
-    var round: Round = try makeReadyRound()
-    let engine: AIEngine = AIEngine(difficulty: .hard)
-
-    let action: AIAction = engine.chooseAction(for: round, playerID: "alice")
-    try action.apply(to: &round, playerID: "alice")
-}
-
-@Test
 func aiEngineMakesMoveConvenience() throws {
     var round: Round = try makeReadyRound()
 
     // Alice's turn — AI makes a move
-    try round.makeAIMove(difficulty: .medium)
+    try round.makeAIMove()
 
     // Should now be Bob's turn (or Alice drew first card and is in drawingSecondCard)
     #expect(round.currentPlayerID != nil)
@@ -849,7 +831,7 @@ func aiEngineHandlesPermitSelection() throws {
     try round.drawPermits()
 
     // AI should choose which permits to keep
-    let engine: AIEngine = AIEngine(difficulty: .hard)
+    let engine: AIEngine = AIEngine()
     let action: AIAction = engine.chooseAction(for: round, playerID: "alice")
 
     if case .keepPermits(let permitIDs) = action {
@@ -875,7 +857,7 @@ func aiEngineFullGame() throws {
     )
 
     // Setup: both players select permits via AI
-    let easyEngine: AIEngine = AIEngine(difficulty: .easy)
+    let engine: AIEngine = AIEngine()
 
     // Alice selects initial permits
     try round.selectInitialPermits(
@@ -895,18 +877,18 @@ func aiEngineFullGame() throws {
     while !round.isComplete && turnCount < maxTurns {
         guard let playerID = round.currentPlayerID else { break }
 
-        let action: AIAction = easyEngine.chooseAction(for: round, playerID: playerID)
+        let action: AIAction = engine.chooseAction(for: round, playerID: playerID)
         try action.apply(to: &round, playerID: playerID)
 
         // If AI drew permits, it needs to keep some
         if case .waitingForPlayer(let id, .choosingPermits) = round.state {
-            let keepAction: AIAction = easyEngine.chooseAction(for: round, playerID: id)
+            let keepAction: AIAction = engine.chooseAction(for: round, playerID: id)
             try keepAction.apply(to: &round, playerID: id)
         }
 
         // If AI drew first card, it needs a second
         if case .waitingForPlayer(let id, .drawingSecondCard) = round.state {
-            let secondAction: AIAction = easyEngine.chooseAction(for: round, playerID: id)
+            let secondAction: AIAction = engine.chooseAction(for: round, playerID: id)
             try secondAction.apply(to: &round, playerID: id)
         }
 
@@ -937,7 +919,7 @@ func faceUpCardsAlwaysFiveWithStandardDeck() throws {
 
         assertFaceUpInvariant(round: round, context: "game \(gameIndex) after setup")
 
-        let engine: AIEngine = AIEngine(difficulty: .hard)
+        let engine: AIEngine = AIEngine()
         var turnCount: Int = 0
         let maxTurns: Int = 300
 

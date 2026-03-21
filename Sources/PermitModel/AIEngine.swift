@@ -1,29 +1,10 @@
 import Foundation
 
-public enum AIDifficulty: String, CaseIterable, Codable, Sendable {
-    case easy
-    case medium
-    case hard
-
-    public var displayableName: String {
-        switch self {
-        case .easy: "Easy"
-        case .medium: "Medium"
-        case .hard: "Hard"
-        }
-    }
-}
-
 public struct AIEngine: Sendable {
-    private let difficulty: AIDifficulty
-
-    public init(difficulty: AIDifficulty) {
-        self.difficulty = difficulty
-    }
+    public init() {}
 
     // MARK: - Public API
 
-    /// Returns an action the AI wants to take. The caller is responsible for applying it to the round.
     public func chooseAction(for round: Round, playerID: PlayerID) -> AIAction {
         guard case .waitingForPlayer(let id, let phase) = round.state, id == playerID else {
             return .drawCards(source: .drawPile)
@@ -33,342 +14,486 @@ public struct AIEngine: Sendable {
         case .choosingAction:
             return chooseMainAction(round: round, playerID: playerID)
         case .drawingSecondCard:
-            return chooseSecondCardSource(round: round)
+            return chooseSecondCardDraw(round: round, playerID: playerID)
         case .choosingPermits(let drawn):
             return .keepPermits(permitIDs: choosePermitsToKeep(drawn: drawn, round: round, playerID: playerID))
         }
     }
 
-    /// Convenience: applies the AI's chosen action directly to the round.
+    public func chooseInitialPermits(from permits: [Permit], round: Round, playerID: PlayerID) -> [PermitID] {
+        guard permits.count >= 2 else {
+            return permits.map(\.id)
+        }
+
+        let pairs: [(Int, Int)] = permits.count == 3
+            ? [(0, 1), (0, 2), (1, 2)]
+            : [(0, 1)]
+
+        var bestPairScore: Double = -.infinity
+        var bestPairIndices: (Int, Int) = (0, 1)
+
+        for (i, j) in pairs {
+            let p1 = permits[i]
+            let p2 = permits[j]
+            var score: Double = 0
+
+            let cost1 = shortestPathCost(from: p1.city1, to: p1.city2, round: round, playerID: playerID)
+            let cost2 = shortestPathCost(from: p2.city1, to: p2.city2, round: round, playerID: playerID)
+
+            if let c1 = cost1, c1 > 0 {
+                score += Double(p1.points) / Double(c1) * 10
+            }
+            if let c2 = cost2, c2 > 0 {
+                score += Double(p2.points) / Double(c2) * 10
+            }
+
+            if cost1 == nil { score -= 20 }
+            if cost2 == nil { score -= 20 }
+
+            let cities1: Set<City> = [p1.city1, p1.city2]
+            let cities2: Set<City> = [p2.city1, p2.city2]
+            if !cities1.isDisjoint(with: cities2) {
+                score += 15
+            }
+
+            if score > bestPairScore {
+                bestPairScore = score
+                bestPairIndices = (i, j)
+            }
+        }
+
+        return [permits[bestPairIndices.0].id, permits[bestPairIndices.1].id]
+    }
+
     public func makeMove(on round: inout Round, playerID: PlayerID) throws {
-        let action: AIAction = chooseAction(for: round, playerID: playerID)
+        let action = chooseAction(for: round, playerID: playerID)
         try action.apply(to: &round, playerID: playerID)
     }
 
-    // MARK: - Main Action Selection
+    // MARK: - Main Decision
 
     private func chooseMainAction(round: Round, playerID: PlayerID) -> AIAction {
-        let claimable: [(route: Route, cardIDs: [CardID])] = round.claimableRoutes(for: playerID)
-
-        switch difficulty {
-        case .easy:
-            return chooseEasyAction(round: round, playerID: playerID, claimable: claimable)
-        case .medium:
-            return chooseMediumAction(round: round, playerID: playerID, claimable: claimable)
-        case .hard:
-            return chooseHardAction(round: round, playerID: playerID, claimable: claimable)
+        guard let hand = round.playerHand(for: playerID) else {
+            return bestDrawCardAction(round: round, playerID: playerID, desiredColors: [:])
         }
-    }
 
-    // MARK: - Easy
+        let claimable = round.claimableRoutes(for: playerID)
+        let myRoutes = round.claimedRoutes(for: playerID)
+        let targetRoutes = computeTargetRoutes(hand: hand, myRoutes: myRoutes, round: round, playerID: playerID)
 
-    private func chooseEasyAction(round: Round, playerID: PlayerID, claimable: [(route: Route, cardIDs: [CardID])]) -> AIAction {
-        // Easy: 60% draw cards, 30% claim random claimable route, 10% draw permits
-        let roll: Double = Double.random(in: 0..<1)
-
-        if roll < 0.3, let pick = claimable.randomElement() {
-            return .claimRoute(routeID: pick.route.id, cardIDs: pick.cardIDs)
-        } else if roll < 0.4, !round.permitDeck.isEmpty {
-            return .drawPermits
-        } else if round.canDrawAnyCard {
-            return randomDrawCardAction(round: round)
-        } else if let pick = claimable.randomElement() {
-            return .claimRoute(routeID: pick.route.id, cardIDs: pick.cardIDs)
-        } else if !round.permitDeck.isEmpty {
-            return .drawPermits
-        } else {
-            return randomDrawCardAction(round: round)
-        }
-    }
-
-    // MARK: - Medium
-
-    private func chooseMediumAction(round: Round, playerID: PlayerID, claimable: [(route: Route, cardIDs: [CardID])]) -> AIAction {
-        // Medium: prefer claiming routes that help complete permits, otherwise draw
-        let hand: PlayerHand? = round.playerHand(for: playerID)
-
-        // Score each claimable route by whether it helps a permit
         let scored: [(route: Route, cardIDs: [CardID], score: Double)] = claimable.map { entry in
-            var score: Double = Double(Route.routeScore(length: entry.route.length))
-            if let hand {
-                for permit in hand.permits {
-                    if routeHelpsPermit(route: entry.route, permit: permit, round: round, playerID: playerID) {
-                        score += Double(permit.points)
-                    }
-                }
-            }
+            let score = scoreRoute(
+                entry.route,
+                targetRoutes: targetRoutes,
+                hand: hand,
+                myRoutes: myRoutes,
+                round: round,
+                playerID: playerID
+            )
             return (route: entry.route, cardIDs: entry.cardIDs, score: score)
         }
 
-        if let best = scored.max(by: { $0.score < $1.score }), best.score > 3 {
+        let best = scored.max(by: { $0.score < $1.score })
+
+        if let best, best.score >= 10.0 {
             return .claimRoute(routeID: best.route.id, cardIDs: best.cardIDs)
         }
 
-        // If few cards, draw (if any draw is possible)
-        if let hand, hand.cards.count < 6, round.canDrawAnyCard {
-            return randomDrawCardAction(round: round)
-        }
-
-        // Consider drawing permits if we have few
-        if let hand, hand.permits.count < 3, !round.permitDeck.isEmpty {
-            return .drawPermits
-        }
-
-        if round.canDrawAnyCard {
-            return randomDrawCardAction(round: round)
-        }
-        if let pick = claimable.randomElement() {
-            return .claimRoute(routeID: pick.route.id, cardIDs: pick.cardIDs)
-        }
-        if !round.permitDeck.isEmpty {
-            return .drawPermits
-        }
-        return randomDrawCardAction(round: round)
-    }
-
-    // MARK: - Hard
-
-    private func chooseHardAction(round: Round, playerID: PlayerID, claimable: [(route: Route, cardIDs: [CardID])]) -> AIAction {
-        let hand: PlayerHand? = round.playerHand(for: playerID)
-
-        // Score claimable routes with strategic depth
-        let scored: [(route: Route, cardIDs: [CardID], score: Double)] = claimable.map { entry in
-            var score: Double = Double(Route.routeScore(length: entry.route.length))
-
-            if let hand {
-                // Big bonus for completing a permit connection
-                for permit in hand.permits {
-                    if routeHelpsPermit(route: entry.route, permit: permit, round: round, playerID: playerID) {
-                        score += Double(permit.points) * 2.0
-                    }
-                    // Check if claiming this route would complete the permit entirely
-                    if wouldCompletePermit(route: entry.route, permit: permit, round: round, playerID: playerID) {
-                        score += Double(permit.points) * 3.0
-                    }
-                }
-
-                // Bonus for shorter routes (efficient segment usage)
-                if entry.route.length <= 2 {
-                    score += 2.0
-                }
-
-                // Bonus for blocking double routes in small games
-                if round.playerHands.count <= 3, entry.route.doubleRoutePartnerID != nil {
-                    score += 3.0
-                }
-            }
-
-            return (route: entry.route, cardIDs: entry.cardIDs, score: score)
-        }
-
-        // Claim if we have a high-scoring option
-        if let best = scored.max(by: { $0.score < $1.score }), best.score > 5 {
+        if round.isFinalRound, let best, best.score > 0 {
             return .claimRoute(routeID: best.route.id, cardIDs: best.cardIDs)
         }
 
-        // Draw permits strategically if we have few and the deck has some
-        if let hand, hand.permits.count < 3, !round.permitDeck.isEmpty, hand.cards.count >= 4 {
+        if let best, best.score >= 3.0, hand.cards.count >= 4 {
+            return .claimRoute(routeID: best.route.id, cardIDs: best.cardIDs)
+        }
+
+        if shouldDrawPermits(hand: hand, myRoutes: myRoutes, round: round, playerID: playerID) {
             return .drawPermits
         }
 
-        // Otherwise draw cards if possible, preferring useful colors
+        let desiredColors = computeDesiredColors(targetRoutes: targetRoutes, allRoutes: round.routes)
+
         if round.canDrawAnyCard {
-            return smartDrawCardAction(round: round, playerID: playerID)
+            return bestDrawCardAction(round: round, playerID: playerID, desiredColors: desiredColors)
         }
-        if let pick = claimable.randomElement() {
-            return .claimRoute(routeID: pick.route.id, cardIDs: pick.cardIDs)
+
+        if let best {
+            return .claimRoute(routeID: best.route.id, cardIDs: best.cardIDs)
         }
         if !round.permitDeck.isEmpty {
             return .drawPermits
-        }
-        return smartDrawCardAction(round: round, playerID: playerID)
-    }
-
-    // MARK: - Permit Selection
-
-    private func choosePermitsToKeep(drawn: [Permit], round: Round, playerID: PlayerID) -> [PermitID] {
-        switch difficulty {
-        case .easy:
-            // Keep 1 random permit
-            if let pick = drawn.randomElement() {
-                return [pick.id]
-            }
-            return [drawn[0].id]
-
-        case .medium:
-            // Keep permits with lower point values (easier to complete)
-            let sorted: [Permit] = drawn.sorted { $0.points < $1.points }
-            return [sorted[0].id]
-
-        case .hard:
-            // Keep permits that overlap with already-claimed routes
-            let claimed: [Route] = round.claimedRoutes(for: playerID)
-            let claimedCities: Set<City> = Set(claimed.flatMap { [$0.city1, $0.city2] })
-
-            let scored: [(permit: Permit, score: Double)] = drawn.map { permit in
-                var score: Double = 0
-                if claimedCities.contains(permit.city1) { score += 10 }
-                if claimedCities.contains(permit.city2) { score += 10 }
-                // Prefer lower-point permits (easier) unless we have good coverage
-                score -= Double(permit.points) * 0.3
-                return (permit: permit, score: score)
-            }
-
-            // Keep 1 or 2 depending on how good they are
-            let sorted: [(permit: Permit, score: Double)] = scored.sorted { $0.score > $1.score }
-            if sorted.count >= 2 && sorted[1].score > 5 {
-                return [sorted[0].permit.id, sorted[1].permit.id]
-            }
-            return [sorted[0].permit.id]
-        }
-    }
-
-    // MARK: - Card Drawing Helpers
-
-    private func randomDrawCardAction(round: Round) -> AIAction {
-        // Prefer a non-wild face-up card if available, otherwise draw pile (only if pile has cards)
-        let nonWildIndices: [Int] = round.faceUpCards.enumerated().compactMap { index, cardID in
-            round.cardsMap[cardID]?.isWild != true ? index : nil
-        }
-        if let idx = nonWildIndices.randomElement() {
-            return .drawCards(source: .faceUp(index: idx))
-        }
-        if round.canDrawFromPile {
-            return .drawCards(source: .drawPile)
-        }
-        // Pile empty: take any face-up (e.g. wild) if available
-        if let idx = round.faceUpCards.indices.randomElement() {
-            return .drawCards(source: .faceUp(index: idx))
         }
         return .drawCards(source: .drawPile)
     }
 
-    private func smartDrawCardAction(round: Round, playerID: PlayerID) -> AIAction {
-        // Try to draw a face-up card whose color matches unclaimed routes we want
-        guard let hand = round.playerHand(for: playerID) else {
-            return fallbackDrawCardAction(round: round)
+    // MARK: - Path Planning
+
+    /// For each incomplete permit, finds the shortest path of unclaimed routes needed.
+    /// Returns a map of routeID → cumulative importance (sum of permit points for each
+    /// permit whose plan uses that route).
+    private func computeTargetRoutes(
+        hand: PlayerHand,
+        myRoutes: [Route],
+        round: Round,
+        playerID: PlayerID
+    ) -> [RouteID: Double] {
+        var targets: [RouteID: Double] = [:]
+        let network = buildAdjacency(from: myRoutes)
+
+        for permit in hand.permits {
+            if isConnected(from: permit.city1, to: permit.city2, adjacency: network) {
+                continue
+            }
+            if let path = shortestPath(from: permit.city1, to: permit.city2, round: round, playerID: playerID) {
+                for routeID in path {
+                    targets[routeID, default: 0] += Double(permit.points)
+                }
+            }
         }
 
-        // Find colors we need for permit-relevant routes
-        let neededColors: Set<CardColor> = desiredCardColors(hand: hand, round: round, playerID: playerID)
+        return targets
+    }
 
-        // Check face-up cards for a match
+    /// Dijkstra through the board graph.
+    /// Already-claimed routes by this player cost 0; unclaimed cost route.length;
+    /// routes claimed by opponents are impassable.
+    /// Returns the list of unclaimed route IDs the player would need to claim.
+    private func shortestPath(
+        from start: City,
+        to end: City,
+        round: Round,
+        playerID: PlayerID
+    ) -> [RouteID]? {
+        struct Edge {
+            let routeID: RouteID
+            let destination: City
+            let cost: Int
+            let needsToClaim: Bool
+        }
+
+        var graph: [City: [Edge]] = [:]
+
+        for route in round.routes {
+            if let claimedBy = route.claimedBy {
+                if claimedBy == playerID {
+                    let edge = Edge(routeID: route.id, destination: route.city2, cost: 0, needsToClaim: false)
+                    let reverse = Edge(routeID: route.id, destination: route.city1, cost: 0, needsToClaim: false)
+                    graph[route.city1, default: []].append(edge)
+                    graph[route.city2, default: []].append(reverse)
+                }
+                continue
+            }
+
+            if let partnerID = route.doubleRoutePartnerID,
+               let partner = round.routes.first(where: { $0.id == partnerID }) {
+                if partner.claimedBy == playerID { continue }
+                if round.playerHands.count <= 3, partner.claimedBy != nil { continue }
+            }
+
+            let edge = Edge(routeID: route.id, destination: route.city2, cost: route.length, needsToClaim: true)
+            let reverse = Edge(routeID: route.id, destination: route.city1, cost: route.length, needsToClaim: true)
+            graph[route.city1, default: []].append(edge)
+            graph[route.city2, default: []].append(reverse)
+        }
+
+        var dist: [City: Int] = [start: 0]
+        var prev: [City: (city: City, routeID: RouteID, needsToClaim: Bool)] = [:]
+        var visited: Set<City> = []
+        var queue: [(city: City, cost: Int)] = [(start, 0)]
+
+        while !queue.isEmpty {
+            queue.sort { $0.cost < $1.cost }
+            let (current, currentCost) = queue.removeFirst()
+
+            if visited.contains(current) { continue }
+            visited.insert(current)
+
+            if current == end { break }
+
+            for edge in graph[current] ?? [] {
+                let newCost = currentCost + edge.cost
+                if newCost < (dist[edge.destination] ?? Int.max) {
+                    dist[edge.destination] = newCost
+                    prev[edge.destination] = (current, edge.routeID, edge.needsToClaim)
+                    queue.append((edge.destination, newCost))
+                }
+            }
+        }
+
+        guard dist[end] != nil else { return nil }
+
+        var routesToClaim: [RouteID] = []
+        var city = end
+        while city != start {
+            guard let previous = prev[city] else { return nil }
+            if previous.needsToClaim {
+                routesToClaim.append(previous.routeID)
+            }
+            city = previous.city
+        }
+
+        return routesToClaim
+    }
+
+    private func shortestPathCost(
+        from start: City,
+        to end: City,
+        round: Round,
+        playerID: PlayerID
+    ) -> Int? {
+        guard let path = shortestPath(from: start, to: end, round: round, playerID: playerID) else {
+            return nil
+        }
+        return path.reduce(0) { sum, routeID in
+            sum + (round.routes.first(where: { $0.id == routeID })?.length ?? 0)
+        }
+    }
+
+    // MARK: - Route Scoring
+
+    private func scoreRoute(
+        _ route: Route,
+        targetRoutes: [RouteID: Double],
+        hand: PlayerHand,
+        myRoutes: [Route],
+        round: Round,
+        playerID: PlayerID
+    ) -> Double {
+        var score: Double = Double(Route.routeScore(length: route.length))
+        let network = buildAdjacency(from: myRoutes)
+
+        for permit in hand.permits {
+            if isConnected(from: permit.city1, to: permit.city2, adjacency: network) {
+                continue
+            }
+            if wouldCompletePermit(route: route, permit: permit, myRoutes: myRoutes) {
+                score += Double(permit.points) * 5.0
+            }
+        }
+
+        if let targetScore = targetRoutes[route.id] {
+            score += targetScore * 2.0
+        }
+
+        let networkCities = Set(myRoutes.flatMap { [$0.city1, $0.city2] })
+        if !networkCities.isEmpty {
+            let routeCities: Set<City> = [route.city1, route.city2]
+            if !routeCities.isDisjoint(with: networkCities) {
+                score += 2.0
+            } else if targetRoutes[route.id] == nil {
+                score -= 3.0
+            }
+        }
+
+        return score
+    }
+
+    // MARK: - Permit Decisions
+
+    private func shouldDrawPermits(
+        hand: PlayerHand,
+        myRoutes: [Route],
+        round: Round,
+        playerID: PlayerID
+    ) -> Bool {
+        guard !round.permitDeck.isEmpty else { return false }
+        guard !round.isFinalRound else { return false }
+
+        let network = buildAdjacency(from: myRoutes)
+        let allComplete = hand.permits.allSatisfy { permit in
+            isConnected(from: permit.city1, to: permit.city2, adjacency: network)
+        }
+
+        return allComplete && myRoutes.count >= 3
+    }
+
+    private func choosePermitsToKeep(
+        drawn: [Permit],
+        round: Round,
+        playerID: PlayerID
+    ) -> [PermitID] {
+        guard let hand = round.playerHand(for: playerID) else {
+            return [drawn[0].id]
+        }
+
+        let myRoutes = round.claimedRoutes(for: playerID)
+        let network = buildAdjacency(from: myRoutes)
+        let networkCities = Set(myRoutes.flatMap { [$0.city1, $0.city2] })
+        let permitCities = Set(hand.permits.flatMap { [$0.city1, $0.city2] })
+        let relevantCities = networkCities.union(permitCities)
+
+        let scored: [(permit: Permit, score: Double)] = drawn.map { permit in
+            var score: Double = 0
+
+            if isConnected(from: permit.city1, to: permit.city2, adjacency: network) {
+                score += Double(permit.points) * 3.0
+            }
+
+            if relevantCities.contains(permit.city1) { score += 8 }
+            if relevantCities.contains(permit.city2) { score += 8 }
+
+            if let cost = shortestPathCost(from: permit.city1, to: permit.city2, round: round, playerID: playerID),
+               cost > 0 {
+                score += Double(permit.points) / Double(cost) * 5
+            } else if shortestPathCost(from: permit.city1, to: permit.city2, round: round, playerID: playerID) == nil {
+                score -= Double(permit.points) * 2.0
+            }
+
+            return (permit: permit, score: score)
+        }
+
+        let sorted = scored.sorted { $0.score > $1.score }
+
+        var kept: [PermitID] = [sorted[0].permit.id]
+        if sorted.count >= 2, sorted[1].score > 5 {
+            kept.append(sorted[1].permit.id)
+        }
+
+        return kept
+    }
+
+    // MARK: - Card Drawing
+
+    private func computeDesiredColors(
+        targetRoutes: [RouteID: Double],
+        allRoutes: [Route]
+    ) -> [CardColor: Double] {
+        var colors: [CardColor: Double] = [:]
+
+        for (routeID, importance) in targetRoutes {
+            guard let route = allRoutes.first(where: { $0.id == routeID }) else { continue }
+            if route.color == .any {
+                for color in CardColor.regularColors {
+                    colors[color, default: 0] += importance * 0.3
+                }
+            } else if let cardColor = route.color.cardColor {
+                colors[cardColor, default: 0] += importance
+            }
+        }
+
+        return colors
+    }
+
+    private func bestDrawCardAction(
+        round: Round,
+        playerID: PlayerID,
+        desiredColors: [CardColor: Double]
+    ) -> AIAction {
+        guard round.canDrawAnyCard else {
+            return .drawCards(source: .drawPile)
+        }
+
+        var usefulCount = 0
+        for (_, cardID) in round.faceUpCards.enumerated() {
+            guard let card = round.cardsMap[cardID], !card.isWild else { continue }
+            if desiredColors[card.color] != nil { usefulCount += 1 }
+        }
+
+        if usefulCount < 2 {
+            for (index, cardID) in round.faceUpCards.enumerated() {
+                if round.cardsMap[cardID]?.isWild == true {
+                    return .drawCards(source: .faceUp(index: index))
+                }
+            }
+        }
+
+        var bestIndex: Int?
+        var bestScore: Double = 0
         for (index, cardID) in round.faceUpCards.enumerated() {
             guard let card = round.cardsMap[cardID], !card.isWild else { continue }
-            if neededColors.contains(card.color) {
-                return .drawCards(source: .faceUp(index: index))
+            if let score = desiredColors[card.color], score > bestScore {
+                bestScore = score
+                bestIndex = index
             }
         }
 
-        // Check for a wild card (always useful)
+        if let index = bestIndex {
+            return .drawCards(source: .faceUp(index: index))
+        }
+
+        if round.canDrawFromPile {
+            return .drawCards(source: .drawPile)
+        }
+
+        if let index = round.faceUpCards.indices.first {
+            return .drawCards(source: .faceUp(index: index))
+        }
+
+        return .drawCards(source: .drawPile)
+    }
+
+    private func chooseSecondCardDraw(round: Round, playerID: PlayerID) -> AIAction {
+        guard let hand = round.playerHand(for: playerID) else {
+            return fallbackSecondDraw(round: round)
+        }
+
+        let myRoutes = round.claimedRoutes(for: playerID)
+        let targetRoutes = computeTargetRoutes(hand: hand, myRoutes: myRoutes, round: round, playerID: playerID)
+        let desiredColors = computeDesiredColors(targetRoutes: targetRoutes, allRoutes: round.routes)
+
+        var bestIndex: Int?
+        var bestScore: Double = 0
         for (index, cardID) in round.faceUpCards.enumerated() {
-            if round.cardsMap[cardID]?.isWild == true {
-                return .drawCards(source: .faceUp(index: index))
+            guard let card = round.cardsMap[cardID], !card.isWild else { continue }
+            if let score = desiredColors[card.color], score > bestScore {
+                bestScore = score
+                bestIndex = index
             }
         }
 
-        return fallbackDrawCardAction(round: round)
+        if let index = bestIndex {
+            return .drawCards(source: .faceUp(index: index))
+        }
+
+        return fallbackSecondDraw(round: round)
     }
 
-    /// Returns a valid draw action: draw pile only if it has cards, otherwise a face-up card if any.
-    private func fallbackDrawCardAction(round: Round) -> AIAction {
-        if round.canDrawFromPile {
-            return .drawCards(source: .drawPile)
-        }
-        if let idx = round.faceUpCards.indices.randomElement() {
-            return .drawCards(source: .faceUp(index: idx))
-        }
-        return .drawCards(source: .drawPile)
-    }
-
-    private func chooseSecondCardSource(round: Round) -> AIAction {
-        // Can't draw wild as second card from face-up, so pick a non-wild face-up or draw pile
-        let nonWildIndices: [Int] = round.faceUpCards.enumerated().compactMap { index, cardID in
-            round.cardsMap[cardID]?.isWild != true ? index : nil
-        }
-        if let idx = nonWildIndices.randomElement() {
-            return .drawCards(source: .faceUp(index: idx))
+    private func fallbackSecondDraw(round: Round) -> AIAction {
+        for (index, cardID) in round.faceUpCards.enumerated() {
+            if round.cardsMap[cardID]?.isWild != true {
+                return .drawCards(source: .faceUp(index: index))
+            }
         }
         if round.canDrawFromPile {
             return .drawCards(source: .drawPile)
         }
-        // No non-wild face-up and pile empty: take a face-up anyway (will throw cannotDrawWildAsSecondCard in rare edge case)
-        if let idx = round.faceUpCards.indices.randomElement() {
-            return .drawCards(source: .faceUp(index: idx))
+        if let index = round.faceUpCards.indices.first {
+            return .drawCards(source: .faceUp(index: index))
         }
         return .drawCards(source: .drawPile)
     }
 
-    // MARK: - Route Analysis
+    // MARK: - Graph Utilities
 
-    private func cardColorForRouteColor(_ routeColor: Route.Color) -> CardColor? {
-        switch routeColor {
-        case .purple: .purple
-        case .blue: .blue
-        case .orange: .orange
-        case .white: .white
-        case .green: .green
-        case .yellow: .yellow
-        case .black: .black
-        case .red: .red
-        case .any: nil
+    private func buildAdjacency(from routes: [Route]) -> [City: Set<City>] {
+        var adj: [City: Set<City>] = [:]
+        for route in routes {
+            adj[route.city1, default: []].insert(route.city2)
+            adj[route.city2, default: []].insert(route.city1)
         }
+        return adj
     }
 
-    private func routeHelpsPermit(route: Route, permit: Permit, round: Round, playerID: PlayerID) -> Bool {
-        let claimedCities: Set<City> = Set(round.claimedRoutes(for: playerID).flatMap { [$0.city1, $0.city2] })
-        let routeCities: Set<City> = [route.city1, route.city2]
-        let permitCities: Set<City> = [permit.city1, permit.city2]
-
-        // Route touches at least one permit city, or extends the claimed network toward a permit city
-        return !routeCities.isDisjoint(with: permitCities) || !routeCities.isDisjoint(with: claimedCities)
-    }
-
-    private func wouldCompletePermit(route: Route, permit: Permit, round: Round, playerID: PlayerID) -> Bool {
-        // Simulate claiming this route and check if the permit would be completed
-        var testRoutes: [Route] = round.routes
-        if let idx = testRoutes.firstIndex(where: { $0.id == route.id }) {
-            testRoutes[idx].claimedBy = playerID
-        }
-
-        let playerRoutes: [Route] = testRoutes.filter { $0.claimedBy == playerID }
-        var adjacency: [City: Set<City>] = [:]
-        for r in playerRoutes {
-            adjacency[r.city1, default: []].insert(r.city2)
-            adjacency[r.city2, default: []].insert(r.city1)
-        }
-
-        // BFS from city1 to city2
-        var visited: Set<City> = [permit.city1]
-        var queue: [City] = [permit.city1]
+    private func isConnected(from city1: City, to city2: City, adjacency: [City: Set<City>]) -> Bool {
+        if city1 == city2 { return true }
+        var visited: Set<City> = [city1]
+        var queue: [City] = [city1]
         while !queue.isEmpty {
-            let current: City = queue.removeFirst()
-            if current == permit.city2 { return true }
-            for neighbor in adjacency[current] ?? [] {
-                if !visited.contains(neighbor) {
-                    visited.insert(neighbor)
-                    queue.append(neighbor)
-                }
+            let current = queue.removeFirst()
+            if current == city2 { return true }
+            for neighbor in adjacency[current] ?? [] where !visited.contains(neighbor) {
+                visited.insert(neighbor)
+                queue.append(neighbor)
             }
         }
         return false
     }
 
-    private func desiredCardColors(hand: PlayerHand, round: Round, playerID: PlayerID) -> Set<CardColor> {
-        var colors: Set<CardColor> = []
-        let claimedCities: Set<City> = Set(round.claimedRoutes(for: playerID).flatMap { [$0.city1, $0.city2] })
-
-        for route in round.routes where route.claimedBy == nil {
-            let routeCities: Set<City> = [route.city1, route.city2]
-            // Route is relevant if it touches our network or a permit city
-            let permitCities: Set<City> = Set(hand.permits.flatMap { [$0.city1, $0.city2] })
-            if !routeCities.isDisjoint(with: claimedCities) || !routeCities.isDisjoint(with: permitCities) {
-                if route.color != .any, let cardColor = cardColorForRouteColor(route.color) {
-                    colors.insert(cardColor)
-                }
-            }
-        }
-        return colors
+    private func wouldCompletePermit(route: Route, permit: Permit, myRoutes: [Route]) -> Bool {
+        var adj = buildAdjacency(from: myRoutes)
+        adj[route.city1, default: []].insert(route.city2)
+        adj[route.city2, default: []].insert(route.city1)
+        return isConnected(from: permit.city1, to: permit.city2, adjacency: adj)
     }
 }
 
@@ -397,12 +522,10 @@ public enum AIAction: Equatable, Sendable {
 // MARK: - Round Extension for AI
 
 extension Round {
-    /// Convenience: let the AI make a move for the current player.
-    public mutating func makeAIMove(difficulty: AIDifficulty) throws {
+    public mutating func makeAIMove() throws {
         guard let playerID = currentPlayerID else {
             throw PermitModelError.notWaitingForPlayerToAct
         }
-        let engine: AIEngine = AIEngine(difficulty: difficulty)
-        try engine.makeMove(on: &self, playerID: playerID)
+        try AIEngine().makeMove(on: &self, playerID: playerID)
     }
 }
