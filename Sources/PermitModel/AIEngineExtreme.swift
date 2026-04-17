@@ -1,59 +1,26 @@
 import Foundation
 
-// MARK: - Difficulty & Visibility
+// MARK: - AIEngineExtreme
 
-public enum AIDifficulty: String, Equatable, Codable, Sendable, CaseIterable {
-    /// Legacy greedy heuristic retained as a baseline.
-    case easy
-    /// Full utility-based policy with public-info opponent awareness.
-    case medium
-    /// Utility policy + opponent-permit blocking when visibility allows (single-player “hard”).
-    case hard
-}
-
-/// Gates the AI's access to information the equivalent human would not see at the table.
-public struct AIVisibility: Equatable, Sendable {
-    public let canSeeOpponentHands: Bool
-    public let canSeeOpponentPermits: Bool
-
-    public init(canSeeOpponentHands: Bool, canSeeOpponentPermits: Bool) {
-        self.canSeeOpponentHands = canSeeOpponentHands
-        self.canSeeOpponentPermits = canSeeOpponentPermits
-    }
-
-    public static let publicOnly: AIVisibility = AIVisibility(canSeeOpponentHands: false, canSeeOpponentPermits: false)
-    public static let fullInfo: AIVisibility = AIVisibility(canSeeOpponentHands: true, canSeeOpponentPermits: true)
-}
-
-extension AIDifficulty {
-    public var defaultVisibility: AIVisibility {
-        switch self {
-        case .easy, .medium: return .publicOnly
-        case .hard: return .fullInfo
-        }
-    }
-
-    var usesUtilityPolicy: Bool { self != .easy }
-
-    /// Rollout lookahead is implemented only in `AIEngineExtreme`.
-    var usesLookahead: Bool { self == .hard }
-}
-
-// MARK: - AIEngine
-
-/// Heuristic AI aligned with the Permit improvement plan: unified utilities, hand-aware paths,
-/// permit swing modeling, longest-path estimate, contention, and optional blocking via `visibility`.
-/// For rollout-based lookahead, use `AIEngineExtreme`.
-public struct AIEngine: Sendable {
+/// Heavier AI policy with rollout-based lookahead on close decisions. For the plan-aligned
+/// heuristic engine, use `AIEngine`.
+public struct AIEngineExtreme: Sendable {
     public let difficulty: AIDifficulty
     public let visibility: AIVisibility
+    /// Rollout budget per candidate when lookahead is enabled. Low values keep per-move latency under a few hundred ms.
+    public let rolloutsPerCandidate: Int
+    public let lookaheadCandidateCount: Int
 
     public init(
-        difficulty: AIDifficulty = .medium,
-        visibility: AIVisibility? = nil
+        difficulty: AIDifficulty = .hard,
+        visibility: AIVisibility? = nil,
+        rolloutsPerCandidate: Int = 6,
+        lookaheadCandidateCount: Int = 3
     ) {
         self.difficulty = difficulty
         self.visibility = visibility ?? difficulty.defaultVisibility
+        self.rolloutsPerCandidate = rolloutsPerCandidate
+        self.lookaheadCandidateCount = lookaheadCandidateCount
     }
 
     // MARK: Public API
@@ -107,7 +74,8 @@ public struct AIEngine: Sendable {
 
     // MARK: - Utility Policy (medium + hard)
 
-    /// Unified decision: compute expected utility for claim, draw-cards, and draw-permits, then pick the highest.
+    /// Unified decision: compute expected utility for claim, draw-cards, and draw-permits,
+    /// then pick the highest. Hard difficulty adds a rollout re-ranking on the top-K candidates.
     private func chooseMainAction(round: Round, playerID: PlayerID) -> AIAction {
         guard let hand = round.playerHand(for: playerID) else {
             return bestDrawCardAction(round: round, playerID: playerID, desiredColors: [:], phase: .first)
@@ -150,6 +118,17 @@ public struct AIEngine: Sendable {
 
         guard !candidates.isEmpty else {
             return .drawCards(source: .drawPile)
+        }
+
+        // Lookahead re-ranking on top-K candidates. Skip when the heuristic top is a clear winner —
+        // rollouts are noisy and mostly useful for tie-breaking between comparable options.
+        if difficulty.usesLookahead, candidates.count > 1 {
+            let top = candidates[0].score
+            let second = candidates[1].score
+            if abs(top - second) > 8 {
+                return candidates.first!.action
+            }
+            return rerankWithRollouts(candidates: candidates, round: round, playerID: playerID)
         }
 
         return candidates.first!.action
@@ -382,6 +361,112 @@ public struct AIEngine: Sendable {
         let handCards = ctx.hand.cards.count
         if handCards < 3 { return 1.5 }
         return 3.0
+    }
+
+    // MARK: - Lookahead Re-Ranking
+
+    private func rerankWithRollouts(candidates: [ScoredAction], round: Round, playerID: PlayerID) -> AIAction {
+        let claimCandidates = candidates.prefix(lookaheadCandidateCount).filter {
+            if case .claimRoute = $0.action { return true }
+            return false
+        }
+        if claimCandidates.isEmpty { return candidates.first!.action }
+
+        // For each top claim, simulate; pick max estimated final margin + heuristic.
+        let baseSeed = UInt64(abs(round.id.hashValue &+ playerID.hashValue &+ round.log.count))
+        var bestAction: AIAction = candidates.first!.action
+        var bestScore: Double = -.infinity
+
+        for candidate in candidates.prefix(lookaheadCandidateCount) {
+            let margin = evaluateAction(candidate.action, from: round, playerID: playerID, baseSeed: baseSeed)
+            let combined = candidate.score * 0.6 + margin * 0.4
+            if combined > bestScore {
+                bestScore = combined
+                bestAction = candidate.action
+            }
+        }
+
+        // Also always consider the heuristic top pick — lookahead is a re-ranker, not a gatekeeper.
+        if candidates.first!.score * 0.6 + evaluateAction(candidates.first!.action, from: round, playerID: playerID, baseSeed: baseSeed) * 0.4 > bestScore {
+            bestAction = candidates.first!.action
+        }
+
+        return bestAction
+    }
+
+    /// Runs a few short rollouts from `round` after applying `action` and returns the average score margin for `playerID`.
+    private func evaluateAction(_ action: AIAction, from round: Round, playerID: PlayerID, baseSeed: UInt64) -> Double {
+        var totalMargin: Double = 0
+        var rollouts: Int = 0
+        // Cheap rollout policy: the legacy greedy AI. Rollouts are for *relative* signal —
+        // a fast, unbiased policy gives us far more samples per millisecond than running the
+        // full utility policy recursively, and avoids the exponential blowup of nested lookahead.
+        let rolloutPolicy = AIEngineExtreme(difficulty: .easy, visibility: .publicOnly, rolloutsPerCandidate: 0, lookaheadCandidateCount: 0)
+
+        for i in 0..<max(1, rolloutsPerCandidate) {
+            var sim = round
+            do {
+                try action.apply(to: &sim, playerID: playerID)
+            } catch {
+                return -.infinity
+            }
+
+            var rng = SplitMix64(seed: baseSeed &+ UInt64(i))
+            playout(round: &sim, policy: rolloutPolicy, rng: &rng, maxPlies: 12)
+            totalMargin += scoreMargin(round: sim, playerID: playerID)
+            rollouts += 1
+        }
+
+        return rollouts > 0 ? totalMargin / Double(rollouts) : 0
+    }
+
+    /// Advances the simulated round using the rollout policy until the game ends or the ply budget is exhausted.
+    private func playout(round: inout Round, policy: AIEngineExtreme, rng: inout SplitMix64, maxPlies: Int) {
+        var plies = 0
+        while !round.isComplete, plies < maxPlies {
+            guard case .waitingForPlayer(let id, let phase) = round.state else { break }
+            do {
+                switch phase {
+                case .choosingAction:
+                    let action = policy.chooseAction(for: round, playerID: id)
+                    try action.apply(to: &round, playerID: id)
+                case .drawingSecondCard:
+                    let action = policy.chooseAction(for: round, playerID: id)
+                    try action.apply(to: &round, playerID: id)
+                case .choosingPermits:
+                    let action = policy.chooseAction(for: round, playerID: id)
+                    try action.apply(to: &round, playerID: id)
+                }
+            } catch {
+                break
+            }
+            plies += 1
+            _ = rng.next() // reserved for future stochastic policies
+        }
+    }
+
+    private func scoreMargin(round: Round, playerID: PlayerID) -> Double {
+        // Project forward: include current score + estimated permit swing + longest-path estimate.
+        var scores: [PlayerID: Double] = [:]
+        for hand in round.playerHands {
+            var s = Double(hand.player.score)
+            for permit in hand.permits {
+                if round.isPermitCompleted(permit: permit, playerID: hand.player.id) {
+                    s += Double(permit.points)
+                } else {
+                    s -= Double(permit.points)
+                }
+            }
+            scores[hand.player.id] = s
+        }
+        let longestOwners = round.playersWithLongestPath()
+        for owner in longestOwners {
+            scores[owner, default: 0] += 10.0
+        }
+
+        let me = scores[playerID] ?? 0
+        let best = scores.filter { $0.key != playerID }.values.max() ?? 0
+        return me - best
     }
 
     // MARK: - Permit Choice
@@ -715,6 +800,14 @@ public struct AIEngine: Sendable {
         }
     }
 
+    private func cardCountsByColor(handCards: [Card]) -> [CardColor: Int] {
+        var counts: [CardColor: Int] = [:]
+        for card in handCards {
+            counts[card.color, default: 0] += 1
+        }
+        return counts
+    }
+
     // MARK: - Graph Utilities
 
     func buildAdjacency(from routes: [Route]) -> [City: Set<City>] {
@@ -807,7 +900,7 @@ private struct DecisionContext {
     let round: Round
     let playerID: PlayerID
     let hand: PlayerHand
-    let engine: AIEngine
+    let engine: AIEngineExtreme
 
     let myRoutes: [Route]
     let myAdjacency: [City: Set<City>]
@@ -819,11 +912,11 @@ private struct DecisionContext {
     let blockingValuePerRoute: [RouteID: Double]
 
     /// Cached plan per outstanding permit. `nil` means no feasible path found.
-    private let plans: [PermitID: AIEngine.Plan?]
+    private let plans: [PermitID: AIEngineExtreme.Plan?]
     /// Routes that appear in at least one plan, for fast membership tests.
     private let planEdges: Set<RouteID>
 
-    init(round: Round, playerID: PlayerID, hand: PlayerHand, engine: AIEngine) {
+    init(round: Round, playerID: PlayerID, hand: PlayerHand, engine: AIEngineExtreme) {
         self.round = round
         self.playerID = playerID
         self.hand = hand
@@ -835,13 +928,13 @@ private struct DecisionContext {
         self.myAdjacency = adj
         self.myNetworkCities = Set(mine.flatMap { [$0.city1, $0.city2] })
 
-        var plans: [PermitID: AIEngine.Plan?] = [:]
+        var plans: [PermitID: AIEngineExtreme.Plan?] = [:]
         var edges: Set<RouteID> = []
         var colorWeights: [CardColor: Double] = [:]
 
         for permit in hand.permits {
             if engine.isConnected(from: permit.city1, to: permit.city2, adjacency: adj) {
-                plans[permit.id] = .some(AIEngine.Plan(edgeIDs: [], remainingSegmentCost: 0))
+                plans[permit.id] = .some(AIEngineExtreme.Plan(edgeIDs: [], remainingSegmentCost: 0))
                 continue
             }
             if let plan = engine.shortestHandAwarePath(from: permit.city1, to: permit.city2, round: round, playerID: playerID, hand: hand) {
@@ -904,7 +997,7 @@ private struct DecisionContext {
         self.blockingValuePerRoute = blockTable
     }
 
-    func planFor(permit: Permit) -> AIEngine.Plan? {
+    func planFor(permit: Permit) -> AIEngineExtreme.Plan? {
         guard let entry = plans[permit.id] else { return nil }
         return entry
     }
@@ -923,44 +1016,18 @@ private struct ScoredAction {
     let score: Double
 }
 
-// MARK: - AI Action
+// MARK: - Deterministic RNG
 
-public enum AIAction: Equatable, Sendable {
-    case drawCards(source: Round.DrawSource)
-    case claimRoute(routeID: RouteID, cardIDs: [CardID])
-    case drawPermits
-    case keepPermits(permitIDs: [PermitID])
-
-    public func apply(to round: inout Round, playerID: PlayerID) throws {
-        switch self {
-        case .drawCards(let source):
-            try round.drawCard(from: source)
-        case .claimRoute(let routeID, let cardIDs):
-            try round.claimRoute(routeID: routeID, cardIDs: cardIDs)
-        case .drawPermits:
-            try round.drawPermits()
-        case .keepPermits(let permitIDs):
-            try round.keepPermits(permitIDs: permitIDs)
-        }
-    }
-}
-
-// MARK: - Round Extension for AI
-
-extension Round {
-    /// Default opponent: plan-aligned [`AIEngine`].
-    public mutating func makeAIMove() throws {
-        guard let playerID = currentPlayerID else {
-            throw PermitModelError.notWaitingForPlayerToAct
-        }
-        try AIEngine().makeMove(on: &self, playerID: playerID)
-    }
-
-    /// Rollout-based lookahead policy (heavier CPU).
-    public mutating func makeAIMoveExtreme() throws {
-        guard let playerID = currentPlayerID else {
-            throw PermitModelError.notWaitingForPlayerToAct
-        }
-        try AIEngineExtreme().makeMove(on: &self, playerID: playerID)
+/// SplitMix64 gives a reproducible stream for seeded playouts without hitting the global RNG.
+/// Rollout budgets are small, so this is plenty even for thousands of calls.
+struct SplitMix64 {
+    private var state: UInt64
+    init(seed: UInt64) { self.state = seed == 0 ? 0x9E3779B97F4A7C15 : seed }
+    mutating func next() -> UInt64 {
+        state = state &+ 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        return z ^ (z >> 31)
     }
 }

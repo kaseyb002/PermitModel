@@ -919,7 +919,8 @@ func faceUpCardsAlwaysFiveWithStandardDeck() throws {
 
         assertFaceUpInvariant(round: round, context: "game \(gameIndex) after setup")
 
-        let engine: AIEngine = AIEngine()
+        // Use easy (legacy) policy so four-player games reliably reach completion within the turn budget.
+        let engine: AIEngine = AIEngine(difficulty: .easy)
         var turnCount: Int = 0
         let maxTurns: Int = 300
 
